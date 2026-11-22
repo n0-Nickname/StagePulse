@@ -1,0 +1,491 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
+import { X, Sparkles, Crown, RotateCw, Volume2, VolumeX } from 'lucide-react';
+import { slotsApi } from '../api/client.js';
+import { useAuth } from '../context/AuthContext.jsx';
+import { useTranslation } from '../context/LanguageContext.jsx';
+import {
+  unlockAudio,
+  playReelTick,
+  playReelLock,
+  playJackpotWin,
+} from '../utils/slotSounds.js';
+
+const SYMBOL_KEYS = ['MIC', 'TIMER', 'DIAMOND', 'FIRE', 'CLOWN'];
+
+const SYMBOL_MAP = {
+  MIC: { emoji: '🎙️', label: 'Mic' },
+  TIMER: { emoji: '⏱️', label: 'Timer' },
+  DIAMOND: { emoji: '💎', label: 'Diamond' },
+  FIRE: { emoji: '🔥', label: 'Fire' },
+  CLOWN: { emoji: '🤡', label: 'Clown' },
+};
+
+const DEFAULT_REELS = ['DIAMOND', 'MIC', 'TIMER'];
+const REEL_HEIGHT_PX = 96; // h-24 = 96px
+const STOP_DURATIONS_MS = [1000, 1600, 2300];
+const FINALIZE_MS = 2350;
+const CONFETTI_COLORS = ['#FFD700', '#D97757', '#F7E7CE', '#4A8B6F'];
+
+function buildStrip(targetSymbol, cycles = 3) {
+  const strip = [];
+  for (let c = 0; c < cycles; c++) {
+    for (const key of SYMBOL_KEYS) {
+      strip.push(key);
+    }
+  }
+  strip.push(targetSymbol);
+  return strip;
+}
+
+export default function SlotMachineModal({ isOpen, onClose }) {
+  const { user, refreshUser, updateUser } = useAuth();
+  const { t } = useTranslation();
+  const [strips, setStrips] = useState(() =>
+    DEFAULT_REELS.map((sym) => [sym])
+  );
+  const [offsets, setOffsets] = useState([0, 0, 0]);
+  const [durations, setDurations] = useState([0, 0, 0]);
+  const [spinningReels, setSpinningReels] = useState([false, false, false]);
+  const [landedReels, setLandedReels] = useState([false, false, false]);
+  const [spinPhase, setSpinPhase] = useState('idle'); // 'idle' | 'spinning' | 'won' | 'lost'
+  const [muted, setMuted] = useState(false);
+  const [bannerMessage, setBannerMessage] = useState('');
+  const [error, setError] = useState('');
+
+  const timersRef = useRef([]);
+  const tickIntervalRef = useRef(null);
+  const canvasRef = useRef(null);
+  const confettiRafRef = useRef(null);
+  const mutedRef = useRef(muted);
+
+  useEffect(() => {
+    mutedRef.current = muted;
+  }, [muted]);
+
+  const stopConfetti = useCallback(() => {
+    if (confettiRafRef.current) {
+      cancelAnimationFrame(confettiRafRef.current);
+      confettiRafRef.current = null;
+    }
+    const canvas = canvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      ctx?.clearRect(0, 0, canvas.width, canvas.height);
+    }
+  }, []);
+
+  const launchConfetti = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    const originX = canvas.width / 2;
+    const originY = canvas.height / 2;
+
+    const particles = Array.from({ length: 160 }, () => {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 5 + Math.random() * 12;
+      const isCoin = Math.random() < 0.38;
+      return {
+        x: originX + (Math.random() - 0.5) * 90,
+        y: originY + (Math.random() - 0.5) * 50,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed - 5,
+        size: isCoin ? 7 + Math.random() * 4 : 6 + Math.random() * 6,
+        color: isCoin
+          ? '#FFD700'
+          : CONFETTI_COLORS[Math.floor(Math.random() * CONFETTI_COLORS.length)],
+        isCoin,
+        rotation: Math.random() * Math.PI * 2,
+        vRot: (Math.random() - 0.5) * 0.25,
+        tilt: Math.random() * Math.PI,
+        vTilt: 0.08 + Math.random() * 0.14,
+        alpha: 1,
+      };
+    });
+
+    const gravity = 0.28;
+    const drag = 0.985;
+
+    const animate = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      let alive = false;
+
+      for (const p of particles) {
+        p.vx *= drag;
+        p.vy = p.vy * drag + gravity;
+        p.x += p.vx;
+        p.y += p.vy;
+        p.rotation += p.vRot;
+        p.tilt += p.vTilt;
+        if (p.y > canvas.height * 0.78) {
+          p.alpha -= 0.024;
+        }
+        if (p.alpha <= 0 || p.y > canvas.height + 30) continue;
+
+        alive = true;
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, p.alpha);
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.rotation);
+        const scaleX = Math.cos(p.tilt);
+        ctx.scale(scaleX, 1);
+
+        ctx.fillStyle = p.color;
+        if (p.isCoin) {
+          ctx.beginPath();
+          ctx.arc(0, 0, p.size, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = '#F7E7CE';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        } else {
+          ctx.fillRect(-p.size / 2, -p.size * 0.35, p.size, p.size * 0.7);
+        }
+        ctx.restore();
+      }
+
+      if (alive) {
+        confettiRafRef.current = requestAnimationFrame(animate);
+      } else {
+        confettiRafRef.current = null;
+      }
+    };
+
+    if (confettiRafRef.current) {
+      cancelAnimationFrame(confettiRafRef.current);
+    }
+    confettiRafRef.current = requestAnimationFrame(animate);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      timersRef.current.forEach((id) => clearTimeout(id));
+      timersRef.current = [];
+      if (tickIntervalRef.current) clearInterval(tickIntervalRef.current);
+      stopConfetti();
+    };
+  }, [stopConfetti]);
+
+  useEffect(() => {
+    if (isOpen) {
+      setError('');
+      setBannerMessage('');
+      setSpinPhase(user?.is_pro ? 'won' : 'idle');
+      setSpinningReels([false, false, false]);
+      setLandedReels([false, false, false]);
+      setDurations([0, 0, 0]);
+      setOffsets([0, 0, 0]);
+      if (user?.is_pro) {
+        setStrips([['DIAMOND'], ['DIAMOND'], ['DIAMOND']]);
+      } else {
+        setStrips(DEFAULT_REELS.map((sym) => [sym]));
+      }
+    } else {
+      stopConfetti();
+    }
+  }, [isOpen, user?.is_pro, stopConfetti]);
+
+  if (!isOpen) return null;
+
+  const isSpinning = spinPhase === 'spinning';
+  const isJackpot = spinPhase === 'won';
+
+  const spinsRemaining =
+    user?.spins_remaining !== undefined
+      ? user.spins_remaining
+      : Math.max(0, 3 - (user?.spin_count ?? 0));
+
+  const handleSpin = async () => {
+    if (isSpinning) return;
+
+    // Unlock AudioContext synchronously on direct user gesture
+    unlockAudio();
+
+    timersRef.current.forEach((id) => clearTimeout(id));
+    timersRef.current = [];
+    if (tickIntervalRef.current) clearInterval(tickIntervalRef.current);
+
+    setError('');
+    setBannerMessage('');
+    setSpinPhase('spinning');
+    setSpinningReels([true, true, true]);
+    setLandedReels([false, false, false]);
+    setDurations([0, 0, 0]);
+    setOffsets([0, 0, 0]);
+
+    tickIntervalRef.current = setInterval(() => {
+      playReelTick(mutedRef.current);
+    }, 110);
+
+    try {
+      const result = await slotsApi.spin();
+      const targetReels = result.reels || DEFAULT_REELS;
+      const newStrips = targetReels.map((sym, idx) =>
+        buildStrip(sym, 3 + idx)
+      );
+      setStrips(newStrips);
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          setDurations(STOP_DURATIONS_MS);
+          setOffsets(
+            newStrips.map((strip) => -(strip.length - 1) * REEL_HEIGHT_PX)
+          );
+        });
+      });
+
+      STOP_DURATIONS_MS.forEach((ms, idx) => {
+        const t = setTimeout(() => {
+          playReelLock(idx, mutedRef.current);
+          setSpinningReels((prev) => {
+            const next = [...prev];
+            next[idx] = false;
+            return next;
+          });
+          setLandedReels((prev) => {
+            const next = [...prev];
+            next[idx] = true;
+            return next;
+          });
+        }, ms);
+        timersRef.current.push(t);
+      });
+
+      const finalTimer = setTimeout(async () => {
+        if (tickIntervalRef.current) {
+          clearInterval(tickIntervalRef.current);
+          tickIntervalRef.current = null;
+        }
+        const won = Boolean(result.is_jackpot);
+        setSpinPhase(won ? 'won' : 'lost');
+        setBannerMessage(
+          won ? t('slots.jackpotTitle') : t('slots.tryAgain')
+        );
+
+        if (won) {
+          playJackpotWin(mutedRef.current);
+          launchConfetti();
+        }
+
+        updateUser({
+          is_pro: result.is_pro,
+          spin_count: result.spin_count,
+          spins_remaining: result.spins_remaining,
+        });
+        await refreshUser();
+      }, FINALIZE_MS);
+      timersRef.current.push(finalTimer);
+    } catch (err) {
+      if (tickIntervalRef.current) {
+        clearInterval(tickIntervalRef.current);
+        tickIntervalRef.current = null;
+      }
+      setSpinningReels([false, false, false]);
+      setSpinPhase('idle');
+      setError(err?.message || t('slots.tryAgain'));
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="slot-modal-title"
+    >
+      {/* Full-screen Confetti & Gold Coin Canvas Portal */}
+      {typeof document !== 'undefined' &&
+        createPortal(
+          <canvas
+            ref={canvasRef}
+            data-testid="confetti-canvas"
+            style={{
+              position: 'fixed',
+              inset: 0,
+              width: '100vw',
+              height: '100vh',
+              pointerEvents: 'none',
+              zIndex: 99999,
+            }}
+          />,
+          document.body
+        )}
+
+      <div
+        data-testid="slot-modal-card"
+        className={`relative w-full max-w-md overflow-hidden rounded-2xl border bg-[#2A2926] p-6 shadow-2xl transition-all ${
+          isJackpot
+            ? 'jackpot-frame-glow jackpot-shake border-[#FFD700]/80'
+            : 'border-[#3A3834]'
+        }`}
+      >
+        {/* Rotating Golden Sunburst behind housing on Jackpot */}
+        {isJackpot && (
+          <div
+            aria-hidden="true"
+            className="jackpot-sunburst pointer-events-none absolute left-1/2 top-1/2 h-[520px] w-[520px] opacity-60"
+          />
+        )}
+
+        {/* Top-right Mute & Close controls */}
+        <div className="relative z-10 flex items-center justify-end gap-1.5">
+          <button
+            type="button"
+            onClick={() => setMuted((prev) => !prev)}
+            aria-label={muted ? 'Unmute sound' : 'Mute sound'}
+            className="rounded-lg p-1.5 text-[#9E9A92] hover:bg-[#3A3834] hover:text-[#EAE6DF] transition-colors cursor-pointer"
+          >
+            {muted ? (
+              <VolumeX className="h-4 w-4" />
+            ) : (
+              <Volume2 className="h-4 w-4" />
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={isSpinning}
+            aria-label={t('common.close')}
+            className="rounded-lg p-1.5 text-[#9E9A92] hover:bg-[#3A3834] hover:text-[#EAE6DF] transition-colors cursor-pointer disabled:opacity-40"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="relative z-10 text-center">
+          <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-[#D97757]/15 text-[#D97757]">
+            {isJackpot ? (
+              <Crown className="h-6 w-6 text-[#FFD700]" />
+            ) : (
+              <Sparkles className="h-6 w-6" />
+            )}
+          </div>
+          <h2
+            id="slot-modal-title"
+            className="font-editorial text-2xl font-semibold text-[#EAE6DF]"
+          >
+            {isJackpot ? t('slots.jackpotTitle') : t('slots.title')}
+          </h2>
+          <p className="mt-1 text-sm text-[#9E9A92]">
+            {isJackpot ? t('slots.jackpotDesc') : t('slots.subtitle')}
+          </p>
+        </div>
+
+        {/* 3-Reel Mechanical Slot Window */}
+        <div className="relative z-10 mt-6 grid grid-cols-3 gap-3 rounded-2xl border border-[#3A3834] bg-[#1E1D1B] p-4 shadow-inner">
+          {strips.map((strip, idx) => {
+            const spinning = spinningReels[idx];
+            const landed = landedReels[idx];
+            return (
+              <div
+                key={idx}
+                className={`relative h-24 overflow-hidden rounded-xl border bg-[#2A2926] ${
+                  isJackpot
+                    ? 'border-[#FFD700]/70 bg-[#FFD700]/10'
+                    : 'border-[#3A3834]'
+                }`}
+              >
+                {isJackpot && (
+                  <div
+                    aria-hidden="true"
+                    className="winning-shine-sweep pointer-events-none absolute inset-0 z-10"
+                  />
+                )}
+                <div
+                  className={
+                    isJackpot
+                      ? 'winning-symbol-pop'
+                      : landed && idx === 2
+                      ? 'slot-reel-landed'
+                      : ''
+                  }
+                  style={{
+                    transform: `translateY(${offsets[idx]}px)`,
+                    transitionProperty: 'transform',
+                    transitionDuration: `${durations[idx]}ms`,
+                    transitionTimingFunction: 'cubic-bezier(0.15, 0.85, 0.25, 1)',
+                    filter: spinning ? 'blur(1.5px)' : 'none',
+                  }}
+                >
+                  {strip.map((symbolKey, itemIdx) => {
+                    const sym = SYMBOL_MAP[symbolKey] || SYMBOL_MAP.DIAMOND;
+                    return (
+                      <div
+                        key={itemIdx}
+                        className="flex h-24 flex-col items-center justify-center"
+                      >
+                        <span
+                          className="text-4xl leading-none select-none"
+                          role="img"
+                          aria-label={sym.label}
+                        >
+                          {sym.emoji}
+                        </span>
+                        <span className="mt-1.5 text-[10px] font-semibold uppercase tracking-wider text-[#9E9A92]">
+                          {sym.label}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Status / Error Banner */}
+        {error && (
+          <div className="relative z-10 mt-4 rounded-xl border border-[#D97757]/40 bg-[#D97757]/15 px-3.5 py-2.5 text-center text-xs font-medium text-[#EAE6DF]">
+            {error}
+          </div>
+        )}
+
+        {bannerMessage && !error && (
+          <div
+            data-testid="slot-banner-message"
+            className={`relative z-10 mt-4 rounded-xl border px-3.5 py-2.5 text-center text-xs font-semibold ${
+              isJackpot
+                ? 'badge-slam-in border-[#FFD700]/50 bg-[#4A8B6F]/20 text-[#FFD700]'
+                : 'border-[#3A3834] bg-[#1E1D1B] text-[#9E9A92]'
+            }`}
+          >
+            {bannerMessage}
+          </div>
+        )}
+
+        {/* Action Button */}
+        <div className="relative z-10 mt-6 flex flex-col gap-2">
+          <button
+            type="button"
+            onClick={handleSpin}
+            disabled={isSpinning || (!user?.is_pro && spinsRemaining <= 0)}
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#D97757] hover:bg-[#C46647] disabled:opacity-50 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-colors cursor-pointer"
+          >
+            <RotateCw className={`h-4 w-4 ${isSpinning ? 'animate-spin' : ''}`} />
+            {isSpinning
+              ? t('slots.spinning')
+              : user?.is_pro
+              ? t('slots.spin')
+              : `${t('slots.spin')} (${spinsRemaining})`}
+          </button>
+
+          {user?.is_pro && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-full rounded-xl bg-[#4A8B6F] hover:bg-[#3D765D] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors cursor-pointer"
+            >
+              {t('slots.done')}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
