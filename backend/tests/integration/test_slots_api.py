@@ -1,12 +1,13 @@
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 import pytest
+from httpx import AsyncClient
+
 from app.slots.schemas import SYMBOLS
-from fastapi.testclient import TestClient
 
 
-def test_spin_requires_auth(client: TestClient) -> None:
-    resp = client.post("/api/slots/spin")
+async def test_spin_requires_auth(async_client: AsyncClient) -> None:
+    resp = await async_client.post("/api/slots/spin")
     assert resp.status_code == 401
 
 
@@ -19,18 +20,18 @@ def test_spin_requires_auth(client: TestClient) -> None:
         (0.99, False, 2),
     ],
 )
-def test_first_spin_rng_threshold_matrix(
-    client: TestClient,
-    auth_headers_for: Callable[[str, str], dict[str, str]],
+async def test_first_spin_rng_threshold_matrix(
+    async_client: AsyncClient,
+    auth_headers_for: Callable[[str, str], Awaitable[dict[str, str]]],
     monkeypatch: pytest.MonkeyPatch,
     rng_value: float,
     expected_win: bool,
     expected_remaining: int,
 ) -> None:
-    headers = auth_headers_for(f"rng_{rng_value}@example.com", "password123")
+    headers = await auth_headers_for(f"rng_{rng_value}@example.com", "password123")
     monkeypatch.setattr("app.slots.router.random.random", lambda: rng_value)
 
-    resp = client.post("/api/slots/spin", headers=headers)
+    resp = await async_client.post("/api/slots/spin", headers=headers)
     assert resp.status_code == 200
     data = resp.json()
     assert data["is_jackpot"] is expected_win
@@ -44,36 +45,35 @@ def test_first_spin_rng_threshold_matrix(
         assert len(set(data["reels"])) > 1
 
 
-def test_guaranteed_third_spin_pity_and_idempotency(
-    client: TestClient,
-    auth_headers_for: Callable[[str, str], dict[str, str]],
+async def test_guaranteed_third_spin_pity_and_idempotency(
+    async_client: AsyncClient,
+    auth_headers_for: Callable[[str, str], Awaitable[dict[str, str]]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    headers = auth_headers_for("pity@example.com", "password123")
+    headers = await auth_headers_for("pity@example.com", "password123")
     monkeypatch.setattr("app.slots.router.random.random", lambda: 0.99)
 
-    r1 = client.post("/api/slots/spin", headers=headers).json()
+    r1 = (await async_client.post("/api/slots/spin", headers=headers)).json()
     assert (r1["is_jackpot"], r1["spin_count"], r1["spins_remaining"]) == (False, 1, 2)
 
-    r2 = client.post("/api/slots/spin", headers=headers).json()
+    r2 = (await async_client.post("/api/slots/spin", headers=headers)).json()
     assert (r2["is_jackpot"], r2["spin_count"], r2["spins_remaining"]) == (False, 2, 1)
 
-    r3 = client.post("/api/slots/spin", headers=headers).json()
+    r3 = (await async_client.post("/api/slots/spin", headers=headers)).json()
     assert r3["is_jackpot"] is True
     assert r3["is_pro"] is True
     assert r3["spin_count"] == 3
     assert r3["spins_remaining"] == 0
     assert r3["reels"] == ["DIAMOND", "DIAMOND", "DIAMOND"]
 
-    # Already PRO -> idempotent response without incrementing spin_count
-    r4 = client.post("/api/slots/spin", headers=headers).json()
+    r4 = (await async_client.post("/api/slots/spin", headers=headers)).json()
     assert r4["is_jackpot"] is True
     assert r4["is_pro"] is True
     assert r4["spin_count"] == 3
     assert r4["spins_remaining"] == 0
     assert r4["message"] == "You already unlocked PRO!"
 
-    me = client.get("/api/auth/me", headers=headers).json()
+    me = (await async_client.get("/api/auth/me", headers=headers)).json()
     assert me["is_pro"] is True
     assert me["spin_count"] == 3
     assert me["spins_remaining"] == 0

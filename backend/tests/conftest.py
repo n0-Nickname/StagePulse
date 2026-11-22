@@ -1,50 +1,48 @@
-from collections.abc import AsyncGenerator, Callable, Generator
+import os
+from collections.abc import AsyncGenerator, Awaitable, Callable
 
 import pytest
-from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.pool import StaticPool
+
+os.environ.setdefault("APP_ENV", "dev")
+os.environ.setdefault("JWT_SECRET", "test-jwt-secret-key-at-least-32-bytes-long!")
 
 from app.core.database import Base, get_db
 from app.main import app
 
-TEST_SQLALCHEMY_DATABASE_URL = "sqlite://"
+TEST_SQLALCHEMY_DATABASE_URL = "sqlite+aiosqlite://"
 
-test_engine = create_engine(
+test_engine = create_async_engine(
     TEST_SQLALCHEMY_DATABASE_URL,
     connect_args={"check_same_thread": False},
     poolclass=StaticPool,
 )
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+TestingAsyncSessionLocal = async_sessionmaker(
+    bind=test_engine,
+    expire_on_commit=False,
+    class_=AsyncSession,
+)
 
 
 @pytest.fixture
-def db_session() -> Generator[Session]:
-    Base.metadata.create_all(bind=test_engine)
-    session = TestingSessionLocal()
-    try:
+async def db_session() -> AsyncGenerator[AsyncSession]:
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    async with TestingAsyncSessionLocal() as session:
         yield session
-    finally:
-        session.close()
-        Base.metadata.drop_all(bind=test_engine)
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
 
 
 @pytest.fixture
-def client(db_session: Session) -> Generator[TestClient]:
-    def override_get_db() -> Generator[Session]:
-        yield db_session
-
-    app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app) as test_client:
-        yield test_client
-    app.dependency_overrides.clear()
-
-
-@pytest.fixture
-async def async_client(db_session: Session) -> AsyncGenerator[AsyncClient]:
-    def override_get_db() -> Generator[Session]:
+async def async_client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient]:
+    async def override_get_db() -> AsyncGenerator[AsyncSession]:
         yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
@@ -55,12 +53,14 @@ async def async_client(db_session: Session) -> AsyncGenerator[AsyncClient]:
 
 
 @pytest.fixture
-def auth_headers_for(client: TestClient) -> Callable[[str, str], dict[str, str]]:
-    def _make_headers(
+def auth_headers_for(
+    async_client: AsyncClient,
+) -> Callable[[str, str], Awaitable[dict[str, str]]]:
+    async def _make_headers(
         email: str = "speaker@example.com",
         password: str = "password123",  # noqa: S107
     ) -> dict[str, str]:
-        resp = client.post(
+        resp = await async_client.post(
             "/api/auth/register",
             json={"email": email, "password": password},
         )

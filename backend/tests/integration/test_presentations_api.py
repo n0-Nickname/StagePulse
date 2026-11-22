@@ -1,12 +1,12 @@
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 import pytest
-from fastapi.testclient import TestClient
+from httpx import AsyncClient
 
 
-def test_presentations_require_auth(client: TestClient) -> None:
-    assert client.get("/api/presentations").status_code == 401
-    assert client.post("/api/presentations", json={}).status_code == 401
+async def test_presentations_require_auth(async_client: AsyncClient) -> None:
+    assert (await async_client.get("/api/presentations")).status_code == 401
+    assert (await async_client.post("/api/presentations", json={})).status_code == 401
 
 
 @pytest.mark.parametrize(
@@ -60,26 +60,26 @@ def test_presentations_require_auth(client: TestClient) -> None:
         },
     ],
 )
-def test_create_presentation_validation_errors(
-    client: TestClient,
-    auth_headers_for: Callable[[str, str], dict[str, str]],
+async def test_create_presentation_validation_errors(
+    async_client: AsyncClient,
+    auth_headers_for: Callable[[str, str], Awaitable[dict[str, str]]],
     bad_payload: dict[str, object],
 ) -> None:
-    headers = auth_headers_for("val@example.com", "password123")
-    resp = client.post("/api/presentations", json=bad_payload, headers=headers)
+    headers = await auth_headers_for("val@example.com", "password123")
+    resp = await async_client.post("/api/presentations", json=bad_payload, headers=headers)
     assert resp.status_code == 422
 
 
-def test_pro_user_with_zero_presentations_stats(
-    client: TestClient,
-    auth_headers_for: Callable[[str, str], dict[str, str]],
+async def test_pro_user_with_zero_presentations_stats(
+    async_client: AsyncClient,
+    auth_headers_for: Callable[[str, str], Awaitable[dict[str, str]]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    headers = auth_headers_for("emptypro@example.com", "password123")
+    headers = await auth_headers_for("emptypro@example.com", "password123")
     monkeypatch.setattr("app.slots.router.random.random", lambda: 0.05)
-    assert client.post("/api/slots/spin", headers=headers).json()["is_pro"] is True
+    assert (await async_client.post("/api/slots/spin", headers=headers)).json()["is_pro"] is True
 
-    list_resp = client.get("/api/presentations", headers=headers)
+    list_resp = await async_client.get("/api/presentations", headers=headers)
     assert list_resp.status_code == 200
     data = list_resp.json()
     assert data["is_pro"] is True
@@ -94,12 +94,12 @@ def test_pro_user_with_zero_presentations_stats(
     }
 
 
-def test_free_tier_capping_and_pro_unmasking(
-    client: TestClient,
-    auth_headers_for: Callable[[str, str], dict[str, str]],
+async def test_free_tier_capping_and_pro_unmasking(
+    async_client: AsyncClient,
+    auth_headers_for: Callable[[str, str], Awaitable[dict[str, str]]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    headers = auth_headers_for("tier@example.com", "password123")
+    headers = await auth_headers_for("tier@example.com", "password123")
     sessions = [
         {
             "title": "Pitch 1 - Slow & Short",
@@ -159,11 +159,11 @@ def test_free_tier_capping_and_pro_unmasking(
     ]
 
     for s in sessions:
-        res = client.post("/api/presentations", json=s, headers=headers)
+        res = await async_client.post("/api/presentations", json=s, headers=headers)
         assert res.status_code == 201
         assert res.json()["is_analytics_locked"] is True
 
-    free_data = client.get("/api/presentations", headers=headers).json()
+    free_data = (await async_client.get("/api/presentations", headers=headers)).json()
     assert free_data["is_pro"] is False
     assert free_data["total_count"] == 5
     assert free_data["locked_history_count"] == 2
@@ -172,9 +172,9 @@ def test_free_tier_capping_and_pro_unmasking(
     assert free_data["stats"]["avg_pauses"] is None
 
     monkeypatch.setattr("app.slots.router.random.random", lambda: 0.05)
-    assert client.post("/api/slots/spin", headers=headers).json()["is_pro"] is True
+    assert (await async_client.post("/api/slots/spin", headers=headers)).json()["is_pro"] is True
 
-    pro_data = client.get("/api/presentations", headers=headers).json()
+    pro_data = (await async_client.get("/api/presentations", headers=headers)).json()
     assert pro_data["is_pro"] is True
     assert pro_data["total_count"] == 5
     assert pro_data["locked_history_count"] == 0
