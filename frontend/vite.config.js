@@ -1,6 +1,11 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
+const COOP_COEP_HEADERS = {
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Embedder-Policy': 'require-corp',
+};
+
 export default defineConfig({
   plugins: [react()],
   test: {
@@ -19,11 +24,15 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    headers: COOP_COEP_HEADERS,
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
       },
     },
+  },
+  preview: {
+    headers: COOP_COEP_HEADERS,
   },
 });
