@@ -2,7 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, status
 from sqlalchemy import desc, select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import User
 from app.core.database import get_db
@@ -118,9 +118,9 @@ def _compute_stats(all_rows: list[Presentation], *, is_pro: bool) -> DashboardSt
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
-def create_presentation_endpoint(
+async def create_presentation_endpoint(
     payload: PresentationCreate,
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> PresentationItem:
     """Record a finished presentation session."""
@@ -141,25 +141,24 @@ def create_presentation_endpoint(
         verdict=payload.verdict,
     )
     db.add(row)
-    db.commit()
-    db.refresh(row)
+    await db.commit()
+    await db.refresh(row)
 
     return format_presentation_item(row, is_pro=current_user.is_pro, mask_for_free=True)
 
 
 @router.get("")
-def list_presentations_endpoint(
-    db: Annotated[Session, Depends(get_db)],
+async def list_presentations_endpoint(
+    db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> PresentationListResponse:
     """Fetch presentation history and aggregate stats (tiered by Free vs PRO)."""
-    all_rows = list(
-        db.scalars(
-            select(Presentation)
-            .where(Presentation.user_id == current_user.id)
-            .order_by(desc(Presentation.created_at), desc(Presentation.id))
-        ).all()
+    result = await db.execute(
+        select(Presentation)
+        .where(Presentation.user_id == current_user.id)
+        .order_by(desc(Presentation.created_at), desc(Presentation.id))
     )
+    all_rows = list(result.scalars().all())
 
     total_count = len(all_rows)
     if current_user.is_pro:

@@ -2,7 +2,7 @@ import random
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import User
 from app.core.database import get_db
@@ -30,7 +30,7 @@ def generate_losing_reels() -> tuple[str, str, str]:
             return reels
 
 
-def spin_slot_machine(db: Session, user: User) -> SpinResponse:
+async def spin_slot_machine(db: AsyncSession, user: User) -> SpinResponse:
     """Execute a slot spin with RNG and deterministic 3rd-spin pity jackpot."""
     if user.is_pro:
         return SpinResponse(
@@ -64,8 +64,8 @@ def spin_slot_machine(db: Session, user: User) -> SpinResponse:
         message = f"No match! {spins_remaining} spin(s) left until guaranteed PRO jackpot."
 
     db.add(user)
-    db.commit()
-    db.refresh(user)
+    await db.commit()
+    await db.refresh(user)
 
     return SpinResponse(
         reels=reels,
@@ -78,9 +78,9 @@ def spin_slot_machine(db: Session, user: User) -> SpinResponse:
 
 
 @router.post("/spin")
-def spin_slots(
-    db: Annotated[Session, Depends(get_db)],
+async def spin_slots(
+    db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> SpinResponse:
     """Spin the 3-reel Gacha slot machine to unlock PRO features."""
-    return spin_slot_machine(db=db, user=current_user)
+    return await spin_slot_machine(db=db, user=current_user)
