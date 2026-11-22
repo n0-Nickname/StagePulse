@@ -1,3 +1,0 @@
-project-includes = ["backend/app", "backend/tests/unit"]
-search-path = ["backend"]
-site-package-path = ["backend/.venv/lib/python3.14/site-packages"]
