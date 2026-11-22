@@ -37,6 +37,23 @@ describe('speech analytics helpers', () => {
       isSilentPause: true,
       currentSilenceSec: 2.0,
     });
+
+    // Also supports { start, end } in seconds from tinyasr JSON
+    expect(
+      computeWordTimestampPauses(
+        [
+          { text: 'one', start: 0.2, end: 0.6 },
+          { text: 'two', start: 2.4, end: 2.9 },
+          { text: 'fallback' },
+        ],
+        3500
+      )
+    ).toEqual({
+      pauseCount: 2,
+      totalPauseSec: 5.3,
+      isSilentPause: true,
+      currentSilenceSec: 3.5,
+    });
   });
 
   it('computes overall WPM with 5-second warmup threshold and bilingual fillers', () => {

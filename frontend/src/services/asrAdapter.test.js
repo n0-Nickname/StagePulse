@@ -30,8 +30,9 @@ describe('services/asrAdapter.js', () => {
 
     const adapter = new AsrEngineAdapter({
       workerFactory,
-      modelUrl: '/wasm/model.bin',
-      wasmJsUrl: '/wasm/tinyasr.js',
+      modelUrl: '/models/en-ru-uk.tzf.gz',
+      vadUrl: '/models/silero_vad.onnx.gz',
+      wasmUrl: '/wasm/tinyasr.wasm',
     });
 
     const onProgress = vi.fn();
@@ -48,8 +49,9 @@ describe('services/asrAdapter.js', () => {
     expect(workerInstance.postMessage).toHaveBeenCalledWith({
       type: 'INIT',
       lang: 'uk',
-      modelUrl: '/wasm/model.bin',
-      wasmJsUrl: '/wasm/tinyasr.js',
+      modelUrl: '/models/en-ru-uk.tzf.gz',
+      vadUrl: '/models/silero_vad.onnx.gz',
+      wasmUrl: '/wasm/tinyasr.wasm',
     });
 
     workerInstance.onmessage({ data: { type: 'MODEL_PROGRESS', percent: 50, cached: false } });
@@ -102,7 +104,11 @@ describe('services/asrAdapter.js', () => {
     adapter.reset();
     expect(workerInstance.postMessage).toHaveBeenLastCalledWith({ type: 'RESET' });
 
+    adapter.finish();
+    expect(workerInstance.postMessage).toHaveBeenLastCalledWith({ type: 'FINISH' });
+
     adapter.destroy();
+    expect(workerInstance.postMessage).toHaveBeenLastCalledWith({ type: 'FINISH' });
     expect(workerInstance.terminate).toHaveBeenCalledTimes(1);
     adapter.destroy(); // no-op when already destroyed
   });
