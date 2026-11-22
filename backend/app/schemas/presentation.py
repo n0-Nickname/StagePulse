@@ -1,5 +1,6 @@
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -27,17 +28,17 @@ class PresentationItem(BaseModel):
     target_duration_sec: int
     actual_duration_sec: int
     word_count: int
-    wpm: Optional[float] = None
-    pause_count: Optional[int] = None
-    total_pause_sec: Optional[float] = None
-    pacing_status: Optional[str] = None
+    wpm: float | None = None
+    pause_count: int | None = None
+    total_pause_sec: float | None = None
+    pacing_status: str | None = None
     timing_status: str
     estimation_method: str
     score: int = 0
     verdict: str = ""
-    filler_count: Optional[int] = None
-    top_fillers_json: Optional[str] = None
-    pacing_timeline_json: Optional[str] = None
+    filler_count: int | None = None
+    top_fillers_json: str | None = None
+    pacing_timeline_json: str | None = None
     is_analytics_locked: bool
     created_at: datetime
 
@@ -45,8 +46,8 @@ class PresentationItem(BaseModel):
 class DashboardStats(BaseModel):
     total_sessions: int
     total_practice_sec: int
-    avg_wpm: Optional[float] = None
-    avg_pauses: Optional[float] = None
+    avg_wpm: float | None = None
+    avg_pauses: float | None = None
 
 
 class PresentationListResponse(BaseModel):

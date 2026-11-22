@@ -1,15 +1,15 @@
 """FastAPI application entrypoint."""
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+import app.models.presentation
+import app.models.user
 from app.core.database import Base, engine
-import app.models.user  # noqa: F401
-import app.models.presentation  # noqa: F401
 from app.routers import auth, presentations, slots
 
 

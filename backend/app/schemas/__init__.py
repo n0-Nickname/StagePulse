@@ -1,4 +1,10 @@
-from app.schemas.auth import AuthResponse, LoginRequest, RegisterRequest, TokenResponse, UserResponse
+from app.schemas.auth import (
+    AuthResponse,
+    LoginRequest,
+    RegisterRequest,
+    TokenResponse,
+    UserResponse,
+)
 from app.schemas.presentation import (
     DashboardStats,
     PresentationCreate,
@@ -8,16 +14,16 @@ from app.schemas.presentation import (
 from app.schemas.slot import MAX_SPINS_CAP, SYMBOLS, SpinResponse
 
 __all__ = [
-    "RegisterRequest",
-    "LoginRequest",
-    "UserResponse",
-    "AuthResponse",
-    "TokenResponse",
-    "SpinResponse",
-    "SYMBOLS",
     "MAX_SPINS_CAP",
+    "SYMBOLS",
+    "AuthResponse",
+    "DashboardStats",
+    "LoginRequest",
     "PresentationCreate",
     "PresentationItem",
-    "DashboardStats",
     "PresentationListResponse",
+    "RegisterRequest",
+    "SpinResponse",
+    "TokenResponse",
+    "UserResponse",
 ]

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import random
+
 from sqlalchemy.orm import Session
 
 from app.models.user import User
