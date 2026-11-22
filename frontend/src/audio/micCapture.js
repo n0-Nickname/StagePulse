@@ -1,5 +1,7 @@
 export const TARGET_SAMPLE_RATE = 16000;
-export const CHUNK_SAMPLES = 1600;
+export const CHUNK_SAMPLES = 640; // 40ms at 16kHz
+export const SILENT_MIC_PEAK_THRESHOLD = 0.001;
+export const SILENT_MIC_CHECK_MS = 2000;
 
 export function computeRms(samples) {
   if (!samples || samples.length === 0) return 0;
@@ -11,78 +13,126 @@ export function computeRms(samples) {
   return Math.sqrt(sum / samples.length);
 }
 
-export function createSampleChunker(chunkSize, onChunk, onRms) {
-  let buffer = new Float32Array(chunkSize);
-  let offset = 0;
+export function computePeak(samples) {
+  if (!samples || samples.length === 0) return 0;
+  let peak = 0;
+  for (let i = 0; i < samples.length; i += 1) {
+    const abs = Math.abs(samples[i]);
+    if (abs > peak) peak = abs;
+  }
+  return peak;
+}
+
+/**
+ * 3-tap anti-aliased linear interpolation resampler from native `sourceRate` to 16kHz.
+ * Buffers exact `chunkSize` (640 samples = 40ms) Float32Array frames.
+ */
+export function createResampler(sourceRate, chunkSize, onChunk, onRms) {
+  const ratio = sourceRate / TARGET_SAMPLE_RATE;
+  let outBuffer = new Float32Array(chunkSize);
+  let outOffset = 0;
+  let prev2 = 0;
+  let prev1 = 0;
+  let phase = 0;
 
   return (input) => {
+    if (!input || input.length === 0) return;
+
+    // 3-tap anti-aliasing filter [0.25, 0.5, 0.25] before decimation when ratio > 1
+    const filtered = new Float32Array(input.length);
     for (let i = 0; i < input.length; i += 1) {
-      buffer[offset] = input[i];
-      offset += 1;
-      if (offset === chunkSize) {
-        const readyChunk = buffer;
-        buffer = new Float32Array(chunkSize);
-        offset = 0;
-        onRms?.(computeRms(readyChunk));
-        onChunk?.(readyChunk);
-      }
+      const curr = input[i];
+      filtered[i] = ratio > 1.05 ? 0.25 * prev2 + 0.5 * prev1 + 0.25 * curr : curr;
+      prev2 = prev1;
+      prev1 = curr;
     }
+
+    let pos = phase;
+    while (pos < filtered.length - 1) {
+      const idx = Math.floor(pos);
+      const frac = pos - idx;
+      const sample = filtered[idx] * (1 - frac) + filtered[idx + 1] * frac;
+      outBuffer[outOffset] = sample;
+      outOffset += 1;
+
+      if (outOffset === chunkSize) {
+        const ready = outBuffer;
+        outBuffer = new Float32Array(chunkSize);
+        outOffset = 0;
+        onRms?.(computeRms(ready));
+        onChunk?.(ready);
+      }
+      pos += ratio;
+    }
+    phase = pos - (filtered.length - 1);
   };
 }
 
 const WORKLET_CODE = `
-class TinyAsrCaptureProcessor extends AudioWorkletProcessor {
+class TinyAsrResampleProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
-    this._buffer = new Float32Array(1600);
+    this._ratio = sampleRate / 16000;
+    this._buffer = new Float32Array(640);
     this._offset = 0;
+    this._prev2 = 0;
+    this._prev1 = 0;
+    this._phase = 0;
   }
   process(inputs) {
     const channel = inputs[0] && inputs[0][0];
-    if (!channel) return true;
-    for (let i = 0; i < channel.length; i += 1) {
-      this._buffer[this._offset++] = channel[i];
-      if (this._offset === 1600) {
+    if (!channel || channel.length === 0) return true;
+    const n = channel.length;
+    const filtered = new Float32Array(n);
+    const applyFilter = this._ratio > 1.05;
+    for (let i = 0; i < n; i++) {
+      const curr = channel[i];
+      filtered[i] = applyFilter ? 0.25 * this._prev2 + 0.5 * this._prev1 + 0.25 * curr : curr;
+      this._prev2 = this._prev1;
+      this._prev1 = curr;
+    }
+    let pos = this._phase;
+    while (pos < n - 1) {
+      const idx = Math.floor(pos);
+      const frac = pos - idx;
+      this._buffer[this._offset++] = filtered[idx] * (1 - frac) + filtered[idx + 1] * frac;
+      if (this._offset === 640) {
         const chunk = this._buffer;
-        this._buffer = new Float32Array(1600);
+        this._buffer = new Float32Array(640);
         this._offset = 0;
         this.port.postMessage(chunk, [chunk.buffer]);
       }
+      pos += this._ratio;
     }
+    this._phase = pos - (n - 1);
     return true;
   }
 }
-registerProcessor('tinyasr-capture-processor', TinyAsrCaptureProcessor);
+registerProcessor('tinyasr-resample-processor', TinyAsrResampleProcessor);
 `;
 
-export async function startMicCapture({
+async function openAudioPipeline({
+  constraints,
+  chunkSize,
   onChunk,
   onRms,
-  sampleRate = TARGET_SAMPLE_RATE,
-  chunkSize = CHUNK_SAMPLES,
-} = {}) {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    throw new Error('Browser mediaDevices API unavailable');
-  }
-
+  onPeakSample,
+}) {
   const AudioContextCtor = globalThis.AudioContext || globalThis.webkitAudioContext;
-  if (!AudioContextCtor) {
-    throw new Error('Web Audio API unavailable');
-  }
-
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      echoCancellation: true,
-      noiseSuppression: true,
-    },
-  });
-
-  const audioCtx = new AudioContextCtor({ sampleRate });
+  const stream = await navigator.mediaDevices.getUserMedia(constraints);
+  const audioCtx = new AudioContextCtor();
   const source = audioCtx.createMediaStreamSource(stream);
+
   let workletNode = null;
   let scriptNode = null;
   let muteGain = null;
   let workletUrl = null;
+
+  const emitChunk = (samples) => {
+    onPeakSample?.(computePeak(samples));
+    onRms?.(computeRms(samples));
+    onChunk?.(samples);
+  };
 
   const canUseWorklet =
     Boolean(audioCtx.audioWorklet?.addModule) && typeof globalThis.AudioWorkletNode !== 'undefined';
@@ -92,11 +142,10 @@ export async function startMicCapture({
       const blob = new Blob([WORKLET_CODE], { type: 'application/javascript' });
       workletUrl = URL.createObjectURL(blob);
       await audioCtx.audioWorklet.addModule(workletUrl);
-      workletNode = new globalThis.AudioWorkletNode(audioCtx, 'tinyasr-capture-processor');
+      workletNode = new globalThis.AudioWorkletNode(audioCtx, 'tinyasr-resample-processor');
       workletNode.port.onmessage = (event) => {
         const samples = event.data instanceof Float32Array ? event.data : new Float32Array(event.data);
-        onRms?.(computeRms(samples));
-        onChunk?.(samples);
+        emitChunk(samples);
       };
       source.connect(workletNode);
     } catch {
@@ -105,10 +154,16 @@ export async function startMicCapture({
   }
 
   if (!workletNode) {
-    const pushSamples = createSampleChunker(chunkSize, onChunk, onRms);
+    const pushSamples = createResampler(
+      audioCtx.sampleRate || TARGET_SAMPLE_RATE,
+      chunkSize,
+      onChunk,
+      (rms) => onRms?.(rms)
+    );
     scriptNode = audioCtx.createScriptProcessor(2048, 1, 1);
     scriptNode.onaudioprocess = (event) => {
       const input = event.inputBuffer.getChannelData(0);
+      onPeakSample?.(computePeak(input));
       pushSamples(input);
     };
     muteGain = audioCtx.createGain();
@@ -118,7 +173,7 @@ export async function startMicCapture({
     muteGain.connect(audioCtx.destination);
   }
 
-  const stop = () => {
+  const teardown = () => {
     try {
       workletNode?.disconnect();
       scriptNode?.disconnect();
@@ -136,9 +191,82 @@ export async function startMicCapture({
     }
   };
 
+  return { teardown, audioContext: audioCtx, stream };
+}
+
+export async function startMicCapture({
+  onChunk,
+  onRms,
+  chunkSize = CHUNK_SAMPLES,
+  silentCheckMs = SILENT_MIC_CHECK_MS,
+} = {}) {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    throw new Error('Browser mediaDevices API unavailable');
+  }
+
+  const AudioContextCtor = globalThis.AudioContext || globalThis.webkitAudioContext;
+  if (!AudioContextCtor) {
+    throw new Error('Web Audio API unavailable');
+  }
+
+  let stopped = false;
+  let maxPeak = 0;
+  let fallbackTriggered = false;
+
+  let activePipeline = await openAudioPipeline({
+    constraints: {
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+      },
+    },
+    chunkSize,
+    onChunk,
+    onRms,
+    onPeakSample: (peak) => {
+      if (peak > maxPeak) maxPeak = peak;
+    },
+  });
+
+  // Fallback to `{ audio: true }` if 2s of near-zero peak (< 0.001) indicates a muted/broken raw track
+  const silentTimer = setTimeout(async () => {
+    if (stopped || fallbackTriggered || maxPeak >= SILENT_MIC_PEAK_THRESHOLD) return;
+    fallbackTriggered = true;
+    try {
+      const nextPipeline = await openAudioPipeline({
+        constraints: { audio: true },
+        chunkSize,
+        onChunk,
+        onRms,
+        onPeakSample: (peak) => {
+          if (peak > maxPeak) maxPeak = peak;
+        },
+      });
+      if (stopped) {
+        nextPipeline.teardown();
+        return;
+      }
+      activePipeline.teardown();
+      activePipeline = nextPipeline;
+    } catch {
+      // Keep original pipeline if fallback fails
+    }
+  }, silentCheckMs);
+
+  const stop = () => {
+    stopped = true;
+    clearTimeout(silentTimer);
+    activePipeline.teardown();
+  };
+
   return {
     stop,
-    audioContext: audioCtx,
-    stream,
+    get audioContext() {
+      return activePipeline.audioContext;
+    },
+    get stream() {
+      return activePipeline.stream;
+    },
   };
 }
