@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useState, useCallback, useMemo, useEffect } from 'react';
 import { translations } from '../i18n/translations.js';
 
 const LanguageContext = createContext(null);
@@ -12,14 +12,20 @@ export function LanguageProvider({ children }) {
   const [lang, setLangState] = useState(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
-      return saved === 'en' || saved === 'uk' ? saved : 'uk';
+      return saved === 'en' || saved === 'uk' ? saved : 'en';
     } catch {
-      return 'uk';
+      return 'en';
     }
   });
 
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.lang = lang;
+    }
+  }, [lang]);
+
   const setLang = useCallback((nextLang) => {
-    const normalized = nextLang === 'en' ? 'en' : 'uk';
+    const normalized = nextLang === 'uk' ? 'uk' : 'en';
     setLangState(normalized);
     try {
       localStorage.setItem(STORAGE_KEY, normalized);
@@ -30,7 +36,7 @@ export function LanguageProvider({ children }) {
 
   const t = useCallback(
     (key, fallback) => {
-      const dict = translations[lang] || translations.uk;
+      const dict = translations[lang] || translations.en;
       const value = resolvePath(dict, key);
       if (value !== undefined) return value;
       const enValue = resolvePath(translations.en, key);
