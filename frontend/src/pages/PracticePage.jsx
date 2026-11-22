@@ -78,7 +78,6 @@ export default function PracticePage() {
   };
 
   const handleSaveSession = async ({ title }) => {
-    if (!summaryData) return;
     setIsSaving(true);
     setSaveError(null);
     try {
@@ -89,12 +88,12 @@ export default function PracticePage() {
         word_count: summaryData.wordCount,
         wpm: summaryData.wpm,
         pause_count: summaryData.pauseCount,
-        total_pause_sec: Number((summaryData.totalPauseSec || 0).toFixed(1)),
-        estimation_method: summaryData.estimationMethod || 'speech_api',
+        total_pause_sec: Number(summaryData.totalPauseSec.toFixed(1)),
+        estimation_method: summaryData.estimationMethod,
         score: summaryData.score,
         filler_count: summaryData.fillerCount,
-        top_fillers_json: JSON.stringify(summaryData.fillerBreakdown || {}),
-        pacing_timeline_json: JSON.stringify(summaryData.pacingTimeline || []),
+        top_fillers_json: JSON.stringify(summaryData.fillerBreakdown),
+        pacing_timeline_json: JSON.stringify(summaryData.pacingTimeline),
         verdict: summaryData.verdict,
       });
       setSummaryOpen(false);

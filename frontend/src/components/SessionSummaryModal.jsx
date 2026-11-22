@@ -74,22 +74,15 @@ function PacingCurveChart({ timeline = [], emptyLabel }) {
   );
 }
 
-function AnnotatedTranscript({ transcript = '', lang = 'en' }) {
+function AnnotatedTranscript({ transcript, lang = 'en' }) {
+  const dict = FILLER_WORDS[lang === 'uk' ? 'uk' : 'en'];
   const parts = useMemo(() => {
-    if (!transcript) return [];
-    const dict = FILLER_WORDS[lang === 'uk' ? 'uk' : 'en'] || FILLER_WORDS.en;
     const escaped = dict.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
     const regex = new RegExp(`(${escaped.join('|')})`, 'giu');
     return transcript.split(regex);
-  }, [transcript, lang]);
+  }, [transcript, dict]);
 
-  if (!transcript) return null;
-
-  const dictSet = new Set(
-    (FILLER_WORDS[lang === 'uk' ? 'uk' : 'en'] || FILLER_WORDS.en).map((w) =>
-      w.toLowerCase()
-    )
-  );
+  const dictSet = new Set(dict.map((w) => w.toLowerCase()));
 
   return (
     <p className="text-xs text-[#F4F5F7] leading-relaxed obsidian-inset rounded-xl p-3 max-h-28 overflow-y-auto">

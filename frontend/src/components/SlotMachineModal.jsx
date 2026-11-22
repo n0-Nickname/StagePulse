@@ -63,6 +63,13 @@ export default function SlotMachineModal({ isOpen, onClose }) {
     mutedRef.current = muted;
   }, [muted]);
 
+  const stopTickLoop = useCallback(() => {
+    if (tickIntervalRef.current) {
+      clearInterval(tickIntervalRef.current);
+      tickIntervalRef.current = null;
+    }
+  }, []);
+
   const stopConfetti = useCallback(() => {
     if (confettiRafRef.current) {
       cancelAnimationFrame(confettiRafRef.current);
@@ -77,9 +84,8 @@ export default function SlotMachineModal({ isOpen, onClose }) {
 
   const launchConfetti = useCallback(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
 
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
@@ -157,20 +163,18 @@ export default function SlotMachineModal({ isOpen, onClose }) {
       }
     };
 
-    if (confettiRafRef.current) {
-      cancelAnimationFrame(confettiRafRef.current);
-    }
+    stopConfetti();
     confettiRafRef.current = requestAnimationFrame(animate);
-  }, []);
+  }, [stopConfetti]);
 
   useEffect(() => {
     return () => {
       timersRef.current.forEach((id) => clearTimeout(id));
       timersRef.current = [];
-      if (tickIntervalRef.current) clearInterval(tickIntervalRef.current);
+      stopTickLoop();
       stopConfetti();
     };
-  }, [stopConfetti]);
+  }, [stopConfetti, stopTickLoop]);
 
   useEffect(() => {
     if (isOpen) {
@@ -213,13 +217,12 @@ export default function SlotMachineModal({ isOpen, onClose }) {
       : Math.max(0, 3 - (user?.spin_count ?? 0));
 
   const handleSpin = async () => {
-    if (isSpinning) return;
-
     unlockAudio();
+    stopConfetti();
 
     timersRef.current.forEach((id) => clearTimeout(id));
     timersRef.current = [];
-    if (tickIntervalRef.current) clearInterval(tickIntervalRef.current);
+    stopTickLoop();
 
     setError('');
     setBannerMessage('');
@@ -268,10 +271,7 @@ export default function SlotMachineModal({ isOpen, onClose }) {
       });
 
       const finalTimer = setTimeout(async () => {
-        if (tickIntervalRef.current) {
-          clearInterval(tickIntervalRef.current);
-          tickIntervalRef.current = null;
-        }
+        stopTickLoop();
         const won = Boolean(result.is_jackpot);
         setSpinPhase(won ? 'won' : 'lost');
         setBannerMessage(
@@ -292,10 +292,7 @@ export default function SlotMachineModal({ isOpen, onClose }) {
       }, FINALIZE_MS);
       timersRef.current.push(finalTimer);
     } catch (err) {
-      if (tickIntervalRef.current) {
-        clearInterval(tickIntervalRef.current);
-        tickIntervalRef.current = null;
-      }
+      stopTickLoop();
       setSpinningReels([false, false, false]);
       setSpinPhase('idle');
       setError(formatApiError(err, t));

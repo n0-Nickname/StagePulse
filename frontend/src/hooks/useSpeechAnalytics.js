@@ -253,7 +253,7 @@ export function useSpeechAnalytics(isRunning, activeElapsedSec, speechLang = 'uk
             return Math.min(1, Math.max(0.06, rms * 6.5 * centerWeight + Math.random() * 0.12));
           });
         }
-      } else if (analyserRef.current && timeDomainBuffer && freqBuffer) {
+      } else {
         analyserRef.current.getFloatTimeDomainData(timeDomainBuffer);
         let sumSquares = 0;
         for (let i = 0; i < timeDomainBuffer.length; i++) {
@@ -345,9 +345,7 @@ export function useSpeechAnalytics(isRunning, activeElapsedSec, speechLang = 'uk
         uiThrottleMs = now;
         const normalizedRms = Math.min(1, rms / 0.15);
         setRmsLevel(normalizedRms);
-        if (bars) {
-          setFrequencyBars(bars);
-        }
+        setFrequencyBars(bars);
         if (silenceStartMsRef.current !== null) {
           setCurrentSilenceSec(Number(((now - silenceStartMsRef.current) / 1000).toFixed(1)));
         } else {
@@ -371,14 +369,14 @@ export function useSpeechAnalytics(isRunning, activeElapsedSec, speechLang = 'uk
         return;
       }
 
-      setMicError(null);
-
       if (isSimulatedMicRef.current) {
         setEstimationMethod('audio_burst');
         estimationMethodRef.current = 'audio_burst';
         startAnalysisLoop();
         return;
       }
+
+      setMicError(null);
 
       try {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -494,7 +492,7 @@ export function useSpeechAnalytics(isRunning, activeElapsedSec, speechLang = 'uk
       return;
     }
     const langKey = speechLang.startsWith('uk') ? 'uk' : 'en';
-    const dict = FILLER_WORDS[langKey] || FILLER_WORDS.uk;
+    const dict = FILLER_WORDS[langKey];
     const counts = {};
     let total = 0;
 

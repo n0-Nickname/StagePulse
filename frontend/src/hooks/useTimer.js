@@ -18,9 +18,8 @@ export function useTimer(initialTargetSec = 180) {
   }, []);
 
   const syncElapsed = useCallback(() => {
-    if (startWallMsRef.current === null) return;
-    const now = performance.now();
-    const totalMs = accumulatedMsRef.current + (now - startWallMsRef.current);
+    const startMs = startWallMsRef.current ?? performance.now();
+    const totalMs = accumulatedMsRef.current + (performance.now() - startMs);
     setElapsedSec(Math.floor(totalMs / 1000));
   }, []);
 

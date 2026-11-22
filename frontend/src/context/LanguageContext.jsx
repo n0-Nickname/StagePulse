@@ -19,9 +19,7 @@ export function LanguageProvider({ children }) {
   });
 
   useEffect(() => {
-    if (typeof document !== 'undefined') {
-      document.documentElement.lang = lang;
-    }
+    document.documentElement.lang = lang;
   }, [lang]);
 
   const setLang = useCallback((nextLang) => {
@@ -36,11 +34,8 @@ export function LanguageProvider({ children }) {
 
   const t = useCallback(
     (key, fallback) => {
-      const dict = translations[lang] || translations.en;
-      const value = resolvePath(dict, key);
+      const value = resolvePath(translations[lang], key);
       if (value !== undefined) return value;
-      const enValue = resolvePath(translations.en, key);
-      if (enValue !== undefined) return enValue;
       return fallback !== undefined ? fallback : key;
     },
     [lang]
