@@ -1,8 +1,9 @@
 export class AsrEngineAdapter {
-  constructor({ workerFactory, modelUrl, wasmJsUrl } = {}) {
+  constructor({ workerFactory, modelUrl, vadUrl, wasmUrl } = {}) {
     this.workerFactory = workerFactory;
     this.modelUrl = modelUrl;
-    this.wasmJsUrl = wasmJsUrl;
+    this.vadUrl = vadUrl;
+    this.wasmUrl = wasmUrl;
     this.worker = null;
   }
 
@@ -70,7 +71,8 @@ export class AsrEngineAdapter {
         type: 'INIT',
         lang,
         modelUrl: this.modelUrl,
-        wasmJsUrl: this.wasmJsUrl,
+        vadUrl: this.vadUrl,
+        wasmUrl: this.wasmUrl,
       });
     });
   }
@@ -87,12 +89,17 @@ export class AsrEngineAdapter {
     );
   }
 
+  finish() {
+    this.worker?.postMessage({ type: 'FINISH' });
+  }
+
   reset() {
     this.worker?.postMessage({ type: 'RESET' });
   }
 
   destroy() {
     if (this.worker) {
+      this.worker.postMessage({ type: 'FINISH' });
       this.worker.onmessage = null;
       this.worker.onerror = null;
       this.worker.terminate();
