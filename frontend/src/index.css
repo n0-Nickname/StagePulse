@@ -4,29 +4,174 @@
 
 @layer base {
   :root {
-    --bg-stage: #1E1D1B;
-    --bg-panel: #2A2926;
-    --bg-card: #2A2926;
-    --border-warm: #3A3834;
-    --text-primary: #EAE6DF;
-    --text-secondary: #9E9A92;
-    --accent-terracotta: #D97757;
-    --accent-terracotta-hover: #C46647;
-    --accent-sage: #4A8B6F;
+    --bg-canvas: #07080A;
+    --bg-glass: rgba(18, 19, 23, 0.82);
+    --bg-inset: rgba(11, 12, 16, 0.88);
+    --border-glass: rgba(255, 255, 255, 0.08);
+    --text-primary: #F4F5F7;
+    --text-secondary: #9CA3AF;
+    --accent-crimson: #FF6363;
+    --accent-crimson-hover: #FF4D4D;
+    --accent-violet: #8B5CF6;
+    --accent-emerald: #10B981;
+    --accent-amber: #F59E0B;
+  }
+
+  html {
+    color-scheme: dark;
+    background-color: #07080A;
   }
 
   body {
-    background-color: #1E1D1B;
-    color: #EAE6DF;
+    background-color: #07080A;
+    background-image: radial-gradient(ellipse at top, rgba(255, 99, 99, 0.09), transparent 60%);
+    background-attachment: fixed;
+    color: #F4F5F7;
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     overflow-x: hidden;
   }
 
-  h1, h2, h3, .font-editorial {
-    font-family: 'Newsreader', Georgia, Cambria, 'Times New Roman', serif;
+  h1, h2, h3, h4 {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    letter-spacing: -0.025em;
   }
+
+  code, pre, .font-mono, .tabular-nums {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+}
+
+/* Raycast-inspired Obsidian Glass Surface */
+.obsidian-glass {
+  background: rgba(18, 19, 23, 0.82);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.obsidian-inset {
+  background: rgba(11, 12, 16, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Crimson Primary Glow Button */
+.crimson-glow-btn {
+  background-color: #FF6363;
+  color: #FFFFFF;
+  box-shadow: 0 0 24px rgba(255, 99, 99, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  transition: background-color 180ms ease, box-shadow 180ms ease, transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.crimson-glow-btn:hover:not(:disabled) {
+  background-color: #FF4D4D;
+  box-shadow: 0 0 34px rgba(255, 77, 77, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+
+.crimson-glow-btn:active:not(:disabled) {
+  transform: scale(0.985);
+}
+
+/* Mouse-tracking Spotlight Bento Card */
+.bento-card {
+  position: relative;
+  background: rgba(18, 19, 23, 0.82);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: border-color 220ms ease, transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.bento-card::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: radial-gradient(
+    380px circle at var(--mouse-x, 50%) var(--mouse-y, 50%),
+    rgba(255, 99, 99, 0.45),
+    rgba(139, 92, 246, 0.18) 38%,
+    transparent 70%
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 240ms ease;
+  pointer-events: none;
+}
+
+.bento-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(
+    420px circle at var(--mouse-x, 50%) var(--mouse-y, 50%),
+    rgba(255, 99, 99, 0.07),
+    transparent 60%
+  );
+  opacity: 0;
+  transition: opacity 240ms ease;
+  pointer-events: none;
+}
+
+.bento-card:hover::before,
+.bento-card:hover::after {
+  opacity: 1;
+}
+
+/* Spring Modal & Staggered List Transitions */
+@keyframes modalSpringIn {
+  0% {
+    opacity: 0;
+    transform: translateY(14px) scale(0.96);
+  }
+  70% {
+    opacity: 1;
+    transform: translateY(-2px) scale(1.008);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes backdropFadeIn {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes staggerSlideUp {
+  0% {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.modal-backdrop-in {
+  animation: backdropFadeIn 180ms ease-out forwards;
+  overscroll-behavior: contain;
+}
+
+.modal-spring-in {
+  animation: modalSpringIn 320ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  overscroll-behavior: contain;
+}
+
+.stagger-item {
+  animation: staggerSlideUp 380ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: calc(var(--stagger-index, 0) * 55ms);
 }
 
 /* Custom Staggered Gacha Slot Machine Animations */
@@ -65,12 +210,12 @@
 
 @keyframes jackpotPulse {
   0%, 100% {
-    box-shadow: 0 0 25px rgba(245, 158, 11, 0.35), inset 0 0 15px rgba(245, 158, 11, 0.2);
+    box-shadow: 0 0 28px rgba(245, 158, 11, 0.35), inset 0 0 18px rgba(245, 158, 11, 0.16);
     border-color: rgba(245, 158, 11, 0.85);
   }
   50% {
-    box-shadow: 0 0 50px rgba(245, 158, 11, 0.7), inset 0 0 25px rgba(245, 158, 11, 0.35);
-    border-color: #fde68a;
+    box-shadow: 0 0 54px rgba(245, 158, 11, 0.72), inset 0 0 28px rgba(245, 158, 11, 0.32);
+    border-color: #FDE68A;
   }
 }
 
@@ -96,7 +241,7 @@
 }
 
 .pro-badge-shimmer {
-  background: linear-gradient(90deg, #f59e0b 0%, #fde68a 50%, #f59e0b 100%);
+  background: linear-gradient(90deg, #F59E0B 0%, #FDE68A 50%, #F59E0B 100%);
   background-size: 200% 100%;
   animation: shimmerSweep 3.5s linear infinite;
 }
@@ -134,7 +279,7 @@
 .jackpot-sunburst {
   background: repeating-conic-gradient(
     from 0deg,
-    rgba(255, 215, 0, 0.16) 0deg 12deg,
+    rgba(245, 158, 11, 0.18) 0deg 12deg,
     transparent 12deg 24deg
   );
   animation: sunburstRotate 18s linear infinite;
@@ -148,9 +293,9 @@
   background: linear-gradient(
     115deg,
     transparent 25%,
-    rgba(255, 215, 0, 0.28) 45%,
-    rgba(247, 231, 206, 0.4) 50%,
-    rgba(255, 215, 0, 0.28) 55%,
+    rgba(245, 158, 11, 0.28) 45%,
+    rgba(254, 243, 199, 0.42) 50%,
+    rgba(245, 158, 11, 0.28) 55%,
     transparent 75%
   );
   background-size: 220% 100%;
@@ -162,6 +307,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .modal-backdrop-in,
+  .modal-spring-in,
+  .stagger-item,
   .slot-reel-spinning,
   .slot-reel-landed,
   .jackpot-frame-glow,
@@ -173,5 +321,6 @@
   .badge-slam-in {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
   }
 }
