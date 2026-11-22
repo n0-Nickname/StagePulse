@@ -14,6 +14,7 @@ dependencies = [
     "pyjwt",
     "pwdlib[argon2]",
     "asyncpg",
+    "alembic>=1.20.1",
 ]
 
 [dependency-groups]
@@ -28,8 +29,8 @@ dev = [
 ]
 
 [tool.pyrefly]
-project-includes = ["app", "tests/unit"]
-preset = "all"
+project-includes = ["app", "tests"]
+preset = "strict"
 python-version = "3.14"
 site-package-path = [".venv/lib/python3.14/site-packages"]
 
