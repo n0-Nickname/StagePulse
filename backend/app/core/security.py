@@ -1,51 +1,57 @@
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-import bcrypt
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pwdlib import PasswordHash
+from pwdlib.exceptions import PwdlibError
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth.models import User
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.user import User
 
 bearer_scheme = HTTPBearer(auto_error=False)
+password_hasher = PasswordHash.recommended()
 
 
 def hash_password(password: str) -> str:
-    salt = bcrypt.gensalt()
-    hashed = bcrypt.hashpw(password.encode("utf-8"), salt)
-    return hashed.decode("utf-8")
+    """Hash a plaintext password using Argon2id."""
+    return password_hasher.hash(password)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify a plaintext password against a stored password hash."""
     try:
-        return bcrypt.checkpw(
-            plain_password.encode("utf-8"),
-            hashed_password.encode("utf-8"),
-        )
-    except ValueError:
+        return password_hasher.verify(plain_password, hashed_password)
+    except PwdlibError, ValueError:
         return False
 
 
-def create_access_token(
-    subject: int | str, expires_delta: timedelta | None = None
-) -> str:
+def create_access_token(subject: int | str, expires_delta: timedelta | None = None) -> str:
+    """Create a signed JWT access token for the given subject."""
     expire = datetime.now(UTC) + (
         expires_delta
         if expires_delta is not None
-        else timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        else timedelta(minutes=settings.access_token_expire_minutes)
     )
     to_encode = {"sub": str(subject), "exp": expire}
-    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+    return jwt.encode(
+        to_encode,
+        settings.jwt_secret.get_secret_value(),
+        algorithm=settings.jwt_algorithm,
+    )
 
 
 def decode_access_token(token: str) -> str | None:
+    """Decode a JWT access token and return its subject, or None if invalid."""
     try:
-        payload = jwt.decode(
-            token, settings.SECRET_KEY, algorithms=[settings.JWT_ALGORITHM]
+        payload: dict[str, object] = jwt.decode(
+            token,
+            settings.jwt_secret.get_secret_value(),
+            algorithms=[settings.jwt_algorithm],
         )
         sub = payload.get("sub")
         return str(sub) if sub is not None else None
@@ -57,7 +63,8 @@ def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
     db: Annotated[Session, Depends(get_db)],
 ) -> User:
-    if credentials is None or not credentials.credentials:
+    """Resolve and validate the authenticated User from a Bearer JWT."""
+    if credentials is None or credentials.credentials == "":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
@@ -77,8 +84,8 @@ def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token payload",
             headers={"WWW-Authenticate": "Bearer"},
-        )
-    user = db.query(User).filter(User.id == user_id).first()
+        ) from None
+    user = db.scalar(select(User).where(User.id == user_id))
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
