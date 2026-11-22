@@ -1,0 +1,62 @@
+{
+    "project-session-init": {
+        "enabled": true,
+        "SessionStart": [
+            {
+                "type": "command",
+                "command": "bash ./hooks/init.sh",
+                "timeout": 10
+            }
+        ]
+    },
+    "project-context-guard": {
+        "enabled": true,
+        "PreToolUse": [
+            {
+                "matcher": "read_file",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "bash ./hooks/guard.sh",
+                        "timeout": 10
+                    }
+                ]
+            }
+        ]
+    },
+    "strict-quality-gate": {
+        "enabled": true,
+        "PostToolUse": [
+            {
+                "matcher": "edit_file|write_file",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "bash ./hooks/post_edit_gate.sh",
+                        "timeout": 30
+                    }
+                ]
+            }
+        ]
+    },
+    "strict-quality-inject": {
+        "enabled": true,
+        "PostInvocation": [
+            {
+                "type": "command",
+                "command": "bash ./hooks/post_invocation_inject.sh",
+                "timeout": 5
+            }
+        ]
+    },
+    "hard-stop-gate": {
+        "enabled": true,
+        "Stop": [
+            {
+                "type": "command",
+                "command": "bash ./hooks/stop_gate.sh",
+                "timeout": 45
+            }
+        ]
+    }
+}
