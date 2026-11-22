@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from './context/AuthContext.jsx';
 import { LanguageProvider } from './context/LanguageContext.jsx';
 import Navbar from './components/Navbar.jsx';
 import SlotMachineModal from './components/SlotMachineModal.jsx';
+import LandingPage from './pages/LandingPage.jsx';
 import AuthPage from './pages/AuthPage.jsx';
 import PracticePage from './pages/PracticePage.jsx';
 import DashboardPage from './pages/DashboardPage.jsx';
@@ -14,13 +15,13 @@ function ProtectedRoute({ children }) {
   if (loading) {
     return (
       <div className="min-h-[60vh] flex items-center justify-center">
-        <div className="h-8 w-8 rounded-full border-2 border-[#3A3834] border-t-[#D97757] animate-spin" />
+        <div className="h-8 w-8 rounded-full border-2 border-white/[0.12] border-t-[#FF6363] animate-spin" />
       </div>
     );
   }
 
   if (!user) {
-    return <Navigate to="/auth" replace />;
+    return <Navigate to="/auth?mode=login" replace />;
   }
 
   return children;
@@ -30,18 +31,19 @@ function AppShell() {
   const { user, loading, isSlotModalOpen, closeSlotModal } = useAuth();
 
   return (
-    <div className="min-h-screen bg-[#1E1D1B] text-[#EAE6DF] flex flex-col">
+    <div className="min-h-screen bg-[#07080A] text-[#F4F5F7] flex flex-col">
       <Navbar />
       <main className="flex-1">
         <Routes>
+          <Route path="/" element={<LandingPage />} />
           <Route
             path="/auth"
             element={
-              !loading && user ? <Navigate to="/" replace /> : <AuthPage />
+              !loading && user ? <Navigate to="/practice" replace /> : <AuthPage />
             }
           />
           <Route
-            path="/"
+            path="/practice"
             element={
               <ProtectedRoute>
                 <PracticePage />
