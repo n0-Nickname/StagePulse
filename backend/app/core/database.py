@@ -1,34 +1,45 @@
-from collections.abc import Generator
+from collections.abc import AsyncGenerator
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.orm import DeclarativeBase
 
 from app.core.config import settings
 
 
-def build_connect_args(database_url: str) -> dict[str, bool]:
-    """Return SQLite thread-safety connect args only when using a SQLite URL."""
+def create_app_async_engine(database_url: str) -> AsyncEngine:
+    """Create an async SQLAlchemy engine tuned for SQLite or PostgreSQL."""
     if database_url.startswith("sqlite"):
-        return {"check_same_thread": False}
-    return {}
+        return create_async_engine(
+            database_url,
+            connect_args={"check_same_thread": False},
+        )
+    return create_async_engine(
+        database_url,
+        pool_pre_ping=True,
+        pool_size=10,
+        max_overflow=20,
+    )
 
 
-engine = create_engine(
-    settings.database_url,
-    connect_args=build_connect_args(settings.database_url),
+engine: AsyncEngine = create_app_async_engine(settings.database_url)
+
+AsyncSessionLocal = async_sessionmaker(
+    bind=engine,
+    expire_on_commit=False,
+    class_=AsyncSession,
 )
-
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 class Base(DeclarativeBase):
     pass
 
 
-def get_db() -> Generator[Session]:
-    """Yield a database session and ensure it closes when the request finishes."""
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+async def get_db() -> AsyncGenerator[AsyncSession]:
+    """Yield an async database session and close it when the request completes."""
+    async with AsyncSessionLocal() as session:
+        yield session
