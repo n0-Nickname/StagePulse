@@ -14,6 +14,14 @@ export const BILINGUAL_FILLER_WORDS = {
   en: ['like', 'um', 'uh', 'basically', 'actually', 'literally', 'you know', 'so'],
 };
 
+export function normalizeWordTimestamps(words = []) {
+  return words.map((w) => ({
+    ...w,
+    startMs: w.startMs !== undefined ? w.startMs : Math.round((w.start ?? 0) * 1000),
+    endMs: w.endMs !== undefined ? w.endMs : Math.round((w.end ?? 0) * 1000),
+  }));
+}
+
 export function computeWordTimestampPauses(
   words = [],
   currentElapsedMs = 0,
@@ -28,18 +36,19 @@ export function computeWordTimestampPauses(
     };
   }
 
+  const normalized = normalizeWordTimestamps(words);
   let pauseCount = 0;
   let totalPauseMs = 0;
 
-  for (let i = 1; i < words.length; i += 1) {
-    const gapMs = words[i].startMs - words[i - 1].endMs;
+  for (let i = 1; i < normalized.length; i += 1) {
+    const gapMs = normalized[i].startMs - normalized[i - 1].endMs;
     if (gapMs >= thresholdMs) {
       pauseCount += 1;
       totalPauseMs += gapMs;
     }
   }
 
-  const lastWord = words[words.length - 1];
+  const lastWord = normalized[normalized.length - 1];
   const trailingSilenceMs = Math.max(0, currentElapsedMs - lastWord.endMs);
   const isSilentPause = trailingSilenceMs >= thresholdMs;
   const currentSilenceSec = Number((trailingSilenceMs / 1000).toFixed(1));
