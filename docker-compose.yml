@@ -8,7 +8,24 @@ services:
     volumes:
       - backend_data:/app/data
     environment:
-      - DATABASE_URL=sqlite:///./data/presentation_timer.db
+      - APP_ENV=${APP_ENV:-dev}
+      - JWT_SECRET=${JWT_SECRET:-local-dev-jwt-secret-key-change-in-production-32chars}
+      - DATABASE_URL=${DATABASE_URL:-sqlite+aiosqlite:///./data/presentation_timer.db}
+
+  postgres:
+    image: postgres:17-alpine
+    profiles: ["prod"]
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-app}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-app_secret}
+      - POSTGRES_DB=${POSTGRES_DB:-presentation_timer}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-presentation_timer}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   frontend:
     build:
@@ -21,3 +38,4 @@ services:
 
 volumes:
   backend_data:
+  postgres_data:
