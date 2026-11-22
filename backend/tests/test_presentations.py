@@ -1,16 +1,21 @@
 """Tests for /api/presentations creation, pacing/timing classification, and Free vs PRO tier gating."""
+
 from __future__ import annotations
 
 from unittest.mock import patch
+
+import pytest
+from app.services.presentation_service import classify_pacing, classify_timing
 from fastapi.testclient import TestClient
 
 
-def _register_and_headers(client: TestClient, email: str = "speaker@example.com") -> dict[str, str]:
+def _register_and_headers(
+    client: TestClient, email: str = "speaker@example.com"
+) -> dict[str, str]:
     resp = client.post(
         "/api/auth/register",
         json={
             "email": email,
-            "username": "Speaker",
             "password": "password123",
         },
     )
@@ -19,9 +24,58 @@ def _register_and_headers(client: TestClient, email: str = "speaker@example.com"
     return {"Authorization": f"Bearer {token}"}
 
 
+@pytest.mark.parametrize(
+    ("wpm", "expected"),
+    [
+        (0.0, "too_slow"),
+        (109.9, "too_slow"),
+        (110.0, "optimal"),
+        (160.0, "optimal"),
+        (160.1, "too_fast"),
+    ],
+)
+def test_classify_pacing_boundaries(wpm: float, expected: str) -> None:
+    assert classify_pacing(wpm) == expected
+
+
+@pytest.mark.parametrize(
+    ("actual", "target", "expected"),
+    [
+        (79, 100, "under_time"),
+        (80, 100, "on_time"),
+        (105, 100, "on_time"),
+        (106, 100, "overtime"),
+    ],
+)
+def test_classify_timing_boundaries(actual: int, target: int, expected: str) -> None:
+    assert classify_timing(actual, target) == expected
+
+
 def test_presentations_require_auth(client: TestClient) -> None:
     assert client.get("/api/presentations").status_code in (401, 403)
     assert client.post("/api/presentations", json={}).status_code in (401, 403)
+
+
+def test_pro_user_with_zero_presentations_stats(client: TestClient) -> None:
+    headers = _register_and_headers(client, "emptypro@example.com")
+    with patch("app.services.slot_service.random.random", return_value=0.05):
+        spin_resp = client.post("/api/slots/spin", headers=headers)
+        assert spin_resp.status_code == 200
+        assert spin_resp.json()["is_pro"] is True
+
+    list_resp = client.get("/api/presentations", headers=headers)
+    assert list_resp.status_code == 200
+    data = list_resp.json()
+    assert data["is_pro"] is True
+    assert data["total_count"] == 0
+    assert data["locked_history_count"] == 0
+    assert data["items"] == []
+    assert data["stats"] == {
+        "total_sessions": 0,
+        "total_practice_sec": 0,
+        "avg_wpm": 0.0,
+        "avg_pauses": 0.0,
+    }
 
 
 def test_free_tier_capping_and_pro_unmasking(client: TestClient) -> None:
@@ -97,6 +151,8 @@ def test_free_tier_capping_and_pro_unmasking(client: TestClient) -> None:
         created_item = create_resp.json()
         assert created_item["title"] == s["title"]
         assert created_item["is_analytics_locked"] is True
+        assert created_item["top_fillers_json"] is None
+        assert created_item["pacing_timeline_json"] is None
 
     # 1. Verify Free tier response on GET /api/presentations
     free_resp = client.get("/api/presentations", headers=headers)
@@ -184,5 +240,34 @@ def test_free_tier_capping_and_pro_unmasking(client: TestClient) -> None:
     # PRO stats should be unmasked and accurately averaged
     assert pro_data["stats"]["total_sessions"] == 5
     assert pro_data["stats"]["total_practice_sec"] == 1085
-    assert pro_data["stats"]["avg_wpm"] == round((90.0 + 132.2 + 180.0 + 140.0 + 150.0) / 5, 1)
+    assert pro_data["stats"]["avg_wpm"] == round(
+        (90.0 + 132.2 + 180.0 + 140.0 + 150.0) / 5, 1
+    )
     assert pro_data["stats"]["avg_pauses"] == 2.0
+
+    # 4. Creating a presentation while already PRO returns unmasked item immediately
+    pro_create = client.post(
+        "/api/presentations",
+        json={
+            "title": "Pitch 6 - PRO Direct",
+            "target_duration_sec": 120,
+            "actual_duration_sec": 120,
+            "word_count": 260,
+            "wpm": 130.0,
+            "pause_count": 1,
+            "total_pause_sec": 1.5,
+            "estimation_method": "speech_api",
+            "score": 88,
+            "filler_count": 1,
+            "top_fillers_json": '{"um": 1}',
+            "pacing_timeline_json": '[{"sec": 30, "wpm": 130}]',
+            "verdict": "Solid.",
+        },
+        headers=headers,
+    )
+    assert pro_create.status_code == 201
+    pro_item = pro_create.json()
+    assert pro_item["is_analytics_locked"] is False
+    assert pro_item["filler_count"] == 1
+    assert pro_item["top_fillers_json"] == '{"um": 1}'
+    assert pro_item["pacing_timeline_json"] == '[{"sec": 30, "wpm": 130}]'
