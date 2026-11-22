@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -14,8 +16,13 @@ from app.schemas.auth import AuthResponse, LoginRequest, RegisterRequest, UserRe
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
-@router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
-def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> AuthResponse:
+@router.post(
+    "/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED
+)
+def register(
+    payload: RegisterRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> AuthResponse:
     normalized_email = payload.email.lower().strip()
     existing = db.query(User).filter(User.email == normalized_email).first()
     if existing is not None:
@@ -26,7 +33,6 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> AuthRes
 
     user = User(
         email=normalized_email,
-        username=payload.username.strip(),
         password_hash=hash_password(payload.password),
         is_pro=False,
         spin_count=0,
@@ -44,7 +50,10 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> AuthRes
 
 
 @router.post("/login", response_model=AuthResponse, status_code=status.HTTP_200_OK)
-def login(payload: LoginRequest, db: Session = Depends(get_db)) -> AuthResponse:
+def login(
+    payload: LoginRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> AuthResponse:
     normalized_email = payload.email.lower().strip()
     user = db.query(User).filter(User.email == normalized_email).first()
     if user is None or not verify_password(payload.password, user.password_hash):
@@ -63,5 +72,5 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> AuthResponse:
 
 
 @router.get("/me", response_model=UserResponse, status_code=status.HTTP_200_OK)
-def get_me(current_user: User = Depends(get_current_user)) -> UserResponse:
+def get_me(current_user: Annotated[User, Depends(get_current_user)]) -> UserResponse:
     return UserResponse.model_validate(current_user)

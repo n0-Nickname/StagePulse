@@ -1,10 +1,10 @@
 from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class RegisterRequest(BaseModel):
     email: EmailStr
-    username: str = Field(min_length=1, max_length=100)
     password: str = Field(min_length=6, max_length=128)
 
 
@@ -18,7 +18,6 @@ class UserResponse(BaseModel):
 
     id: int
     email: str
-    username: str
     is_pro: bool
     spin_count: int
     spins_remaining: int

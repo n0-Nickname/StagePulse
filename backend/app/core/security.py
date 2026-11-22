@@ -1,5 +1,4 @@
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 import bcrypt
 import jwt
@@ -30,8 +29,10 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return False
 
 
-def create_access_token(subject: int | str, expires_delta: Optional[timedelta] = None) -> str:
-    expire = datetime.now(timezone.utc) + (
+def create_access_token(
+    subject: int | str, expires_delta: timedelta | None = None
+) -> str:
+    expire = datetime.now(UTC) + (
         expires_delta
         if expires_delta is not None
         else timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -40,9 +41,11 @@ def create_access_token(subject: int | str, expires_delta: Optional[timedelta] =
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 
-def decode_access_token(token: str) -> Optional[str]:
+def decode_access_token(token: str) -> str | None:
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        payload = jwt.decode(
+            token, settings.SECRET_KEY, algorithms=[settings.JWT_ALGORITHM]
+        )
         sub = payload.get("sub")
         return str(sub) if sub is not None else None
     except jwt.PyJWTError:
@@ -50,8 +53,8 @@ def decode_access_token(token: str) -> Optional[str]:
 
 
 def get_current_user(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
-    db: Session = Depends(get_db),
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> User:
     if credentials is None or not credentials.credentials:
         raise HTTPException(
