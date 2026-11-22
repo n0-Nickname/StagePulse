@@ -91,6 +91,8 @@ def setup_logging(app_settings: Settings) -> None:
                     "handlers": ["stdout"],
                     "propagate": False,
                 },
+                "aiosqlite": {"level": "WARNING", "propagate": False},
+                "sqlalchemy.engine": {"level": "WARNING", "propagate": False},
             },
         }
     )
