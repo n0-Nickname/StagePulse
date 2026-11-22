@@ -1,5 +1,8 @@
 """Presentations router (/api/presentations)."""
+
 from __future__ import annotations
+
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
@@ -27,8 +30,8 @@ router = APIRouter(prefix="/api/presentations", tags=["presentations"])
 )
 def create_presentation_endpoint(
     payload: PresentationCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> PresentationItem:
     """Record a finished presentation session."""
     return create_presentation(db=db, user=current_user, payload=payload)
@@ -36,8 +39,8 @@ def create_presentation_endpoint(
 
 @router.get("", response_model=PresentationListResponse)
 def list_presentations_endpoint(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> PresentationListResponse:
     """Fetch presentation history and aggregate stats (tiered by Free vs PRO)."""
     return list_presentations(db=db, user=current_user)
