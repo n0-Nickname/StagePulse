@@ -1,18 +1,20 @@
 """Tests for the Gacha Slot Machine paywall (/api/slots/spin) and 3rd-spin pity guarantee."""
+
 from __future__ import annotations
 
 from unittest.mock import patch
+
+from app.services.slot_service import SYMBOLS, _generate_losing_reels
 from fastapi.testclient import TestClient
 
-from app.services.slot_service import SYMBOLS
 
-
-def _register_and_headers(client: TestClient, email: str = "spinner@example.com") -> dict[str, str]:
+def _register_and_headers(
+    client: TestClient, email: str = "spinner@example.com"
+) -> dict[str, str]:
     resp = client.post(
         "/api/auth/register",
         json={
             "email": email,
-            "username": "Spinner",
             "password": "password123",
         },
     )
@@ -24,6 +26,14 @@ def _register_and_headers(client: TestClient, email: str = "spinner@example.com"
 def test_spin_requires_auth(client: TestClient) -> None:
     resp = client.post("/api/slots/spin")
     assert resp.status_code in (401, 403)
+
+
+def test_generate_losing_reels_retries_on_accidental_match() -> None:
+    choices = ["DIAMOND", "DIAMOND", "DIAMOND", "MIC", "TIMER", "CLOWN"]
+    with patch("app.services.slot_service.random.choice", side_effect=choices):
+        reels = _generate_losing_reels()
+    assert reels == ("MIC", "TIMER", "CLOWN")
+    assert len(set(reels)) > 1
 
 
 def test_guaranteed_third_spin_pity_and_idempotency(client: TestClient) -> None:
