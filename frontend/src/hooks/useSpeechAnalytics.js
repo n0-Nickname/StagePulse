@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { FILLER_WORDS } from '../utils/roastGenerator.js';
+import { startMicCapture } from '../audio/micCapture.js';
+import { createDefaultAsrEngine } from '../services/asrAdapter.js';
 
 const DEFAULT_SILENCE_THRESHOLD = 0.018;
 const PAUSE_DURATION_THRESHOLD_MS = 1500;
@@ -8,10 +9,101 @@ const SPEECH_BURST_PEAK_FACTOR = 1.95;
 const SYLLABLE_COOLDOWN_MS = 140;
 const BAR_COUNT = 24;
 
-export function useSpeechAnalytics(isRunning, activeElapsedSec, speechLang = 'uk-UA') {
+export const BILINGUAL_FILLER_WORDS = {
+  uk: ['ну', 'типу', 'короче', 'блін', 'як би', 'власне', 'значить', 'от'],
+  en: ['like', 'um', 'uh', 'basically', 'actually', 'literally', 'you know', 'so'],
+};
+
+export function computeWordTimestampPauses(
+  words = [],
+  currentElapsedMs = 0,
+  thresholdMs = PAUSE_DURATION_THRESHOLD_MS
+) {
+  if (!Array.isArray(words) || words.length === 0) {
+    return {
+      pauseCount: 0,
+      totalPauseSec: 0,
+      isSilentPause: false,
+      currentSilenceSec: 0,
+    };
+  }
+
+  let pauseCount = 0;
+  let totalPauseMs = 0;
+
+  for (let i = 1; i < words.length; i += 1) {
+    const gapMs = words[i].startMs - words[i - 1].endMs;
+    if (gapMs >= thresholdMs) {
+      pauseCount += 1;
+      totalPauseMs += gapMs;
+    }
+  }
+
+  const lastWord = words[words.length - 1];
+  const trailingSilenceMs = Math.max(0, currentElapsedMs - lastWord.endMs);
+  const isSilentPause = trailingSilenceMs >= thresholdMs;
+  const currentSilenceSec = Number((trailingSilenceMs / 1000).toFixed(1));
+
+  if (isSilentPause) {
+    pauseCount += 1;
+    totalPauseMs += trailingSilenceMs;
+  }
+
+  return {
+    pauseCount,
+    totalPauseSec: Number((totalPauseMs / 1000).toFixed(1)),
+    isSilentPause,
+    currentSilenceSec,
+  };
+}
+
+export function computeOverallWpm(wordCount, elapsedSec) {
+  if (elapsedSec < 5 || wordCount <= 0) return 0;
+  return Math.round(wordCount / (elapsedSec / 60));
+}
+
+export function analyzeFillers(text, speechLang = 'uk-UA') {
+  if (!text) {
+    return { fillerCount: 0, fillerBreakdown: {} };
+  }
+  const langKey = speechLang.startsWith('uk') ? 'uk' : 'en';
+  const dict = BILINGUAL_FILLER_WORDS[langKey];
+  const counts = {};
+  let total = 0;
+
+  for (const phrase of dict) {
+    const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`(^|[^\\p{L}\\p{N}_])(${escaped})(?=$|[^\\p{L}\\p{N}_])`, 'giu');
+    const matches = text.match(regex);
+    if (matches && matches.length > 0) {
+      counts[phrase] = matches.length;
+      total += matches.length;
+    }
+  }
+
+  return { fillerCount: total, fillerBreakdown: counts };
+}
+
+function buildBarsFromRms(rms) {
+  const norm = Math.min(1, rms / 0.15);
+  return new Array(BAR_COUNT).fill(0).map((_, idx) => {
+    const centerWeight = 1 - Math.abs(idx - BAR_COUNT / 2) / (BAR_COUNT / 2);
+    return Math.max(0.05, Math.min(1, norm * centerWeight * 1.15 + 0.05));
+  });
+}
+
+export function useSpeechAnalytics(
+  isRunning,
+  activeElapsedSec,
+  speechLang = 'uk-UA',
+  options = {}
+) {
+  const { engineFactory, micCaptureFactory = startMicCapture } = options;
+
   const [rmsLevel, setRmsLevel] = useState(0);
   const [frequencyBars, setFrequencyBars] = useState(() => new Array(BAR_COUNT).fill(0.05));
   const [wordCount, setWordCount] = useState(0);
+  const [words, setWords] = useState([]);
   const [pauseCount, setPauseCount] = useState(0);
   const [totalPauseSec, setTotalPauseSec] = useState(0);
   const [isSilentPause, setIsSilentPause] = useState(false);
@@ -22,12 +114,14 @@ export function useSpeechAnalytics(isRunning, activeElapsedSec, speechLang = 'uk
   const [isSimulatingSilence, setIsSimulatingSilence] = useState(false);
   const [micError, setMicError] = useState(null);
   const [liveTranscript, setLiveTranscript] = useState('');
-  const [fillerCount, setFillerCount] = useState(0);
-  const [fillerBreakdown, setFillerBreakdown] = useState({});
   const [pacingTimeline, setPacingTimeline] = useState([]);
+  const [modelProgress, setModelProgress] = useState({
+    percent: 100,
+    cached: true,
+    ready: true,
+  });
 
   const lastTimelineBucketRef = useRef(-1);
-  const finalizedTranscriptRef = useRef('');
 
   // Mutable refs for 60fps loop without stale closures
   const isRunningRef = useRef(isRunning);
@@ -36,12 +130,16 @@ export function useSpeechAnalytics(isRunning, activeElapsedSec, speechLang = 'uk
   const isSimulatingSilenceRef = useRef(isSimulatingSilence);
   const estimationMethodRef = useRef(estimationMethod);
   const speechLangRef = useRef(speechLang);
+  const engineFactoryRef = useRef(engineFactory);
+  const micCaptureFactoryRef = useRef(micCaptureFactory);
 
   const audioCtxRef = useRef(null);
   const analyserRef = useRef(null);
   const mediaStreamRef = useRef(null);
   const rafIdRef = useRef(null);
   const recognitionRef = useRef(null);
+  const asrEngineRef = useRef(null);
+  const micCaptureHandleRef = useRef(null);
 
   const silenceStartMsRef = useRef(null);
   const isCurrentlyPausedRef = useRef(false);
@@ -80,10 +178,34 @@ export function useSpeechAnalytics(isRunning, activeElapsedSec, speechLang = 'uk
     speechLangRef.current = speechLang;
   }, [speechLang]);
 
+  useEffect(() => {
+    engineFactoryRef.current = engineFactory;
+  }, [engineFactory]);
+
+  useEffect(() => {
+    micCaptureFactoryRef.current = micCaptureFactory;
+  }, [micCaptureFactory]);
+
   const stopAudioAndSpeech = useCallback(() => {
     if (rafIdRef.current !== null) {
       cancelAnimationFrame(rafIdRef.current);
       rafIdRef.current = null;
+    }
+    if (micCaptureHandleRef.current) {
+      try {
+        micCaptureHandleRef.current.stop();
+      } catch {
+        // Ignore stop errors
+      }
+      micCaptureHandleRef.current = null;
+    }
+    if (asrEngineRef.current) {
+      try {
+        asrEngineRef.current.destroy();
+      } catch {
+        // Ignore destroy errors
+      }
+      asrEngineRef.current = null;
     }
     if (recognitionRef.current) {
       try {
@@ -148,17 +270,17 @@ export function useSpeechAnalytics(isRunning, activeElapsedSec, speechLang = 'uk
         let currentInterimWords = 0;
         let recentText = '';
 
-        for (let i = event.resultIndex; i < event.results.length; i++) {
+        for (let i = event.resultIndex; i < event.results.length; i += 1) {
           const transcript = event.results[i][0].transcript.trim();
           if (!transcript) continue;
-          const words = transcript
+          const count = transcript
             .split(/[\s—–-]+/)
             .map((w) => w.replace(/^[^\p{L}\p{N}'’]+|[^\p{L}\p{N}'’]+$/gu, ''))
             .filter(Boolean).length;
           if (event.results[i].isFinal) {
-            newFinalWords += words;
+            newFinalWords += count;
           } else {
-            currentInterimWords += words;
+            currentInterimWords += count;
           }
           recentText = transcript;
         }
@@ -178,8 +300,7 @@ export function useSpeechAnalytics(isRunning, activeElapsedSec, speechLang = 'uk
       };
 
       recognition.onerror = (event) => {
-        const fatalErrors = ['network', 'not-allowed', 'service-not-allowed', 'audio-capture'];
-        if (fatalErrors.includes(event.error) || event.error) {
+        if (event.error) {
           setEstimationMethod('audio_burst');
           estimationMethodRef.current = 'audio_burst';
         }
@@ -239,7 +360,6 @@ export function useSpeechAnalytics(isRunning, activeElapsedSec, speechLang = 'uk
           rms = 0.004 + Math.random() * 0.003;
           bars = new Array(BAR_COUNT).fill(0).map(() => 0.04 + Math.random() * 0.03);
         } else {
-          // Realistic speech cadence modulation (~3.5 syllables/sec with micro-gaps)
           const cycle = (now % 4200) / 4200;
           const isMicroBreathing = cycle > 0.86;
           if (isMicroBreathing) {
@@ -256,7 +376,7 @@ export function useSpeechAnalytics(isRunning, activeElapsedSec, speechLang = 'uk
       } else {
         analyserRef.current.getFloatTimeDomainData(timeDomainBuffer);
         let sumSquares = 0;
-        for (let i = 0; i < timeDomainBuffer.length; i++) {
+        for (let i = 0; i < timeDomainBuffer.length; i += 1) {
           const sample = timeDomainBuffer[i];
           sumSquares += sample * sample;
         }
@@ -287,7 +407,7 @@ export function useSpeechAnalytics(isRunning, activeElapsedSec, speechLang = 'uk
 
       const threshold = silenceThresholdRef.current;
 
-      // 1. Pause Detection State Machine (> 1.5s below SILENCE_THRESHOLD)
+      // Pause Detection State Machine (> 1.5s below SILENCE_THRESHOLD)
       if (rms < threshold) {
         if (silenceStartMsRef.current === null) {
           silenceStartMsRef.current = now;
@@ -314,7 +434,7 @@ export function useSpeechAnalytics(isRunning, activeElapsedSec, speechLang = 'uk
         }
       }
 
-      // 2. Syllable Energy Burst Detector (runs continuously for audio_burst fallback & hybrid reliability)
+      // Syllable Energy Burst Detector
       const dipThreshold = threshold * SPEECH_BURST_DIP_FACTOR;
       const peakThreshold = Math.max(0.032, threshold * SPEECH_BURST_PEAK_FACTOR);
 
@@ -340,7 +460,6 @@ export function useSpeechAnalytics(isRunning, activeElapsedSec, speechLang = 'uk
         }
       }
 
-      // 3. Throttled UI state updates (~20fps) to keep React snappy
       if (now - uiThrottleMs >= 50) {
         uiThrottleMs = now;
         const normalizedRms = Math.min(1, rms / 0.15);
@@ -363,6 +482,39 @@ export function useSpeechAnalytics(isRunning, activeElapsedSec, speechLang = 'uk
   useEffect(() => {
     let cancelled = false;
 
+    async function initLegacyMicPipeline() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Browser mediaDevices API unavailable');
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+
+      if (cancelled || !isRunningRef.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+
+      mediaStreamRef.current = stream;
+      const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+      const audioCtx = new AudioContextCtor();
+      audioCtxRef.current = audioCtx;
+
+      const source = audioCtx.createMediaStreamSource(stream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.75;
+      source.connect(analyser);
+      analyserRef.current = analyser;
+
+      startSpeechRecognition();
+      startAnalysisLoop();
+    }
+
     async function initAudioAndSpeech() {
       if (!isRunning) {
         stopAudioAndSpeech();
@@ -378,40 +530,88 @@ export function useSpeechAnalytics(isRunning, activeElapsedSec, speechLang = 'uk
 
       setMicError(null);
 
-      try {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          throw new Error('Browser mediaDevices API unavailable');
-        }
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-        });
+      const useWasmPipeline =
+        Boolean(engineFactoryRef.current) || typeof globalThis.Worker !== 'undefined';
 
-        if (cancelled || !isRunningRef.current) {
-          stream.getTracks().forEach((t) => t.stop());
+      if (useWasmPipeline) {
+        const adapter = engineFactoryRef.current
+          ? engineFactoryRef.current()
+          : createDefaultAsrEngine();
+        asrEngineRef.current = adapter;
+        setModelProgress({ percent: 0, cached: false, ready: false });
+
+        try {
+          await adapter.init({
+            lang: speechLangRef.current.startsWith('uk') ? 'uk' : 'en',
+            onProgress: ({ percent, cached }) => {
+              if (!cancelled) {
+                setModelProgress({
+                  percent,
+                  cached,
+                  ready: percent >= 100,
+                });
+              }
+            },
+            onTranscript: ({ words: nextWords, fullText }) => {
+              if (cancelled) return;
+              const safeWords = Array.isArray(nextWords) ? nextWords : [];
+              setWords(safeWords);
+              setWordCount(safeWords.length);
+              if (fullText) {
+                setLiveTranscript(fullText);
+              }
+            },
+          });
+
+          if (cancelled || !isRunningRef.current) {
+            adapter.destroy();
+            asrEngineRef.current = null;
+            return;
+          }
+
+          setModelProgress((prev) => ({ ...prev, percent: 100, ready: true }));
+          setEstimationMethod('speech_api');
+          estimationMethodRef.current = 'speech_api';
+
+          const capture = await micCaptureFactoryRef.current({
+            onChunk: (chunk) => adapter.pushAudio(chunk),
+            onRms: (rms) => {
+              setRmsLevel(Math.min(1, rms / 0.15));
+              setFrequencyBars(buildBarsFromRms(rms));
+            },
+          });
+
+          if (cancelled || !isRunningRef.current) {
+            capture.stop();
+            adapter.destroy();
+            return;
+          }
+
+          micCaptureHandleRef.current = capture;
           return;
+        } catch (err) {
+          adapter.destroy();
+          asrEngineRef.current = null;
+          // If microphone itself failed, switch to Demo Speech Simulator
+          if (err?.message && /mediaDevices|Permission|Audio/i.test(err.message)) {
+            if (!cancelled) {
+              setMicError(err.message);
+              setIsSimulatedMic(true);
+              isSimulatedMicRef.current = true;
+              setEstimationMethod('audio_burst');
+              estimationMethodRef.current = 'audio_burst';
+              startAnalysisLoop();
+            }
+            return;
+          }
+          // Otherwise fall through to Web Speech / Audio Burst fallback
         }
+      }
 
-        mediaStreamRef.current = stream;
-        const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-        const audioCtx = new AudioContextCtor();
-        audioCtxRef.current = audioCtx;
-
-        const source = audioCtx.createMediaStreamSource(stream);
-        const analyser = audioCtx.createAnalyser();
-        analyser.fftSize = 512;
-        analyser.smoothingTimeConstant = 0.75;
-        source.connect(analyser);
-        analyserRef.current = analyser;
-
-        startSpeechRecognition();
-        startAnalysisLoop();
+      try {
+        await initLegacyMicPipeline();
       } catch (err) {
         if (cancelled) return;
-        // Automatic fallback to simulated mic if headless browser or permission denied
         setMicError(
           err?.message || 'Microphone unavailable — switched to Demo Speech Simulator'
         );
@@ -447,16 +647,14 @@ export function useSpeechAnalytics(isRunning, activeElapsedSec, speechLang = 'uk
     setRmsLevel(0);
     setFrequencyBars(new Array(BAR_COUNT).fill(0.05));
     setWordCount(0);
+    setWords([]);
     setPauseCount(0);
     setTotalPauseSec(0);
     setIsSilentPause(false);
     setCurrentSilenceSec(0);
     setLiveTranscript('');
-    setFillerCount(0);
-    setFillerBreakdown({});
     setPacingTimeline([]);
     lastTimelineBucketRef.current = -1;
-    finalizedTranscriptRef.current = '';
     setMicError(null);
     setIsSimulatingSilence(false);
 
@@ -468,46 +666,41 @@ export function useSpeechAnalytics(isRunning, activeElapsedSec, speechLang = 'uk
     estimationMethodRef.current = nextMethod;
   }, [stopAudioAndSpeech]);
 
-  const wpm = useMemo(() => {
-    if (activeElapsedSec < 3 || wordCount <= 0) return 0;
-    const activeSpeakingMinutes = Math.max((activeElapsedSec - totalPauseSec) / 60, 0.1);
-    return Math.round(wordCount / activeSpeakingMinutes);
-  }, [activeElapsedSec, totalPauseSec, wordCount]);
+  // Timestamp-based pause detection overrides RMS pause counters when WASM word timestamps are present
+  const timestampPauses = useMemo(() => {
+    if (words.length === 0) return null;
+    return computeWordTimestampPauses(words, activeElapsedSec * 1000, PAUSE_DURATION_THRESHOLD_MS);
+  }, [words, activeElapsedSec]);
 
-  // Record pacing timeline every 10 seconds while running
+  const effectivePauseCount = timestampPauses ? timestampPauses.pauseCount : pauseCount;
+  const effectiveTotalPauseSec = timestampPauses ? timestampPauses.totalPauseSec : totalPauseSec;
+  const effectiveIsSilentPause = timestampPauses ? timestampPauses.isSilentPause : isSilentPause;
+  const effectiveCurrentSilenceSec = timestampPauses
+    ? timestampPauses.currentSilenceSec
+    : currentSilenceSec;
+
+  const wpm = useMemo(() => {
+    return computeOverallWpm(wordCount, activeElapsedSec);
+  }, [activeElapsedSec, wordCount]);
+
+  // Record 10-second pacing timeline snapshots while running
   useEffect(() => {
     if (!isRunning || activeElapsedSec <= 0) return;
     const bucket = Math.floor(activeElapsedSec / 10);
-    if (bucket > lastTimelineBucketRef.current && activeElapsedSec >= 10 && activeElapsedSec % 10 === 0) {
+    if (
+      bucket > lastTimelineBucketRef.current &&
+      activeElapsedSec >= 10 &&
+      activeElapsedSec % 10 === 0
+    ) {
       lastTimelineBucketRef.current = bucket;
       setPacingTimeline((prev) => [...prev, { sec: activeElapsedSec, wpm }]);
     }
   }, [isRunning, activeElapsedSec, wpm]);
 
-  // Scan liveTranscript for filler words using whole-word Unicode regex
-  useEffect(() => {
-    if (!liveTranscript) {
-      setFillerCount(0);
-      setFillerBreakdown({});
-      return;
-    }
-    const langKey = speechLang.startsWith('uk') ? 'uk' : 'en';
-    const dict = FILLER_WORDS[langKey];
-    const counts = {};
-    let total = 0;
-
-    for (const phrase of dict) {
-      const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const regex = new RegExp(`(^|[^\\p{L}\\p{N}_])(${escaped})(?=$|[^\\p{L}\\p{N}_])`, 'giu');
-      const matches = liveTranscript.match(regex);
-      if (matches && matches.length > 0) {
-        counts[phrase] = matches.length;
-        total += matches.length;
-      }
-    }
-    setFillerCount(total);
-    setFillerBreakdown(counts);
-  }, [liveTranscript, speechLang]);
+  const { fillerCount, fillerBreakdown } = useMemo(
+    () => analyzeFillers(liveTranscript, speechLang),
+    [liveTranscript, speechLang]
+  );
 
   const pacingZone = useMemo(() => {
     if (wpm === 0) return 'warming_up';
@@ -520,13 +713,14 @@ export function useSpeechAnalytics(isRunning, activeElapsedSec, speechLang = 'uk
     rmsLevel,
     frequencyBars,
     wordCount,
+    words,
     setWordCount,
     wpm,
     pacingZone,
-    pauseCount,
-    totalPauseSec,
-    isSilentPause,
-    currentSilenceSec,
+    pauseCount: effectivePauseCount,
+    totalPauseSec: effectiveTotalPauseSec,
+    isSilentPause: effectiveIsSilentPause,
+    currentSilenceSec: effectiveCurrentSilenceSec,
     estimationMethod,
     setEstimationMethod,
     silenceThreshold,
@@ -543,6 +737,7 @@ export function useSpeechAnalytics(isRunning, activeElapsedSec, speechLang = 'uk
     fillerCount,
     fillerBreakdown,
     pacingTimeline,
+    modelProgress,
     resetAnalytics,
   };
 }
