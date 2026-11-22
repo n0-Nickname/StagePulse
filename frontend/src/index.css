@@ -1,0 +1,177 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg-stage: #1E1D1B;
+    --bg-panel: #2A2926;
+    --bg-card: #2A2926;
+    --border-warm: #3A3834;
+    --text-primary: #EAE6DF;
+    --text-secondary: #9E9A92;
+    --accent-terracotta: #D97757;
+    --accent-terracotta-hover: #C46647;
+    --accent-sage: #4A8B6F;
+  }
+
+  body {
+    background-color: #1E1D1B;
+    color: #EAE6DF;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, .font-editorial {
+    font-family: 'Newsreader', Georgia, Cambria, 'Times New Roman', serif;
+  }
+}
+
+/* Custom Staggered Gacha Slot Machine Animations */
+@keyframes slotReelSpin {
+  0% {
+    transform: translateY(-65%);
+    filter: blur(2px);
+  }
+  50% {
+    transform: translateY(5%);
+    filter: blur(3px);
+  }
+  100% {
+    transform: translateY(-65%);
+    filter: blur(2px);
+  }
+}
+
+@keyframes slotReelBounce {
+  0% {
+    transform: translateY(-28px) scale(0.95);
+    filter: blur(1px);
+  }
+  60% {
+    transform: translateY(8px) scale(1.04);
+    filter: blur(0px);
+  }
+  80% {
+    transform: translateY(-4px) scale(0.99);
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    filter: blur(0px);
+  }
+}
+
+@keyframes jackpotPulse {
+  0%, 100% {
+    box-shadow: 0 0 25px rgba(245, 158, 11, 0.35), inset 0 0 15px rgba(245, 158, 11, 0.2);
+    border-color: rgba(245, 158, 11, 0.85);
+  }
+  50% {
+    box-shadow: 0 0 50px rgba(245, 158, 11, 0.7), inset 0 0 25px rgba(245, 158, 11, 0.35);
+    border-color: #fde68a;
+  }
+}
+
+@keyframes shimmerSweep {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.slot-reel-spinning {
+  animation: slotReelSpin 0.16s linear infinite;
+}
+
+.slot-reel-landed {
+  animation: slotReelBounce 0.32s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.jackpot-frame-glow {
+  animation: jackpotPulse 1.6s ease-in-out infinite;
+}
+
+.pro-badge-shimmer {
+  background: linear-gradient(90deg, #f59e0b 0%, #fde68a 50%, #f59e0b 100%);
+  background-size: 200% 100%;
+  animation: shimmerSweep 3.5s linear infinite;
+}
+
+@keyframes jackpotShake {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  15% { transform: translate3d(-5px, 3px, 0) rotate(-0.6deg); }
+  30% { transform: translate3d(5px, -3px, 0) rotate(0.6deg); }
+  45% { transform: translate3d(-4px, -2px, 0) rotate(-0.4deg); }
+  60% { transform: translate3d(4px, 2px, 0) rotate(0.4deg); }
+  75% { transform: translate3d(-2px, 1px, 0); }
+}
+
+@keyframes sunburstRotate {
+  0% { transform: translate(-50%, -50%) rotate(0deg); }
+  100% { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+@keyframes winningSymbolPop {
+  0% { transform: scale(1); }
+  45% { transform: scale(1.22); }
+  100% { transform: scale(1.06); }
+}
+
+@keyframes badgeSlamIn {
+  0% { opacity: 0; transform: scale(1.75) translateY(-8px); }
+  70% { opacity: 1; transform: scale(0.94) translateY(2px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.jackpot-shake {
+  animation: jackpotShake 0.45s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+.jackpot-sunburst {
+  background: repeating-conic-gradient(
+    from 0deg,
+    rgba(255, 215, 0, 0.16) 0deg 12deg,
+    transparent 12deg 24deg
+  );
+  animation: sunburstRotate 18s linear infinite;
+}
+
+.winning-symbol-pop {
+  animation: winningSymbolPop 0.45s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.winning-shine-sweep {
+  background: linear-gradient(
+    115deg,
+    transparent 25%,
+    rgba(255, 215, 0, 0.28) 45%,
+    rgba(247, 231, 206, 0.4) 50%,
+    rgba(255, 215, 0, 0.28) 55%,
+    transparent 75%
+  );
+  background-size: 220% 100%;
+  animation: shimmerSweep 1.8s ease-in-out infinite;
+}
+
+.badge-slam-in {
+  animation: badgeSlamIn 0.48s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slot-reel-spinning,
+  .slot-reel-landed,
+  .jackpot-frame-glow,
+  .pro-badge-shimmer,
+  .jackpot-shake,
+  .jackpot-sunburst,
+  .winning-symbol-pop,
+  .winning-shine-sweep,
+  .badge-slam-in {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
