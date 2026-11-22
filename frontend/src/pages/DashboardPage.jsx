@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { Sparkles, Mic, RefreshCw } from 'lucide-react';
-import { presentationsApi } from '../api/client.js';
+import { presentationsApi, formatApiError } from '../api/client.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useTranslation } from '../context/LanguageContext.jsx';
 import StatsOverview from '../components/StatsOverview.jsx';
@@ -21,7 +21,7 @@ export default function DashboardPage() {
       const res = await presentationsApi.list();
       setData(res);
     } catch (err) {
-      setError(err?.message || t('dashboard.loading'));
+      setError(formatApiError(err, t));
     } finally {
       setLoading(false);
     }
@@ -34,13 +34,13 @@ export default function DashboardPage() {
   const isPro = Boolean(data?.is_pro ?? user?.is_pro);
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
+    <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 text-[#F4F5F7]">
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8">
         <div>
-          <h1 className="font-editorial text-3xl sm:text-4xl font-semibold tracking-tight text-[#EAE6DF]">
+          <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-[#F4F5F7]">
             {t('dashboard.title')}
           </h1>
-          <p className="mt-1 text-sm text-[#9E9A92]">
+          <p className="mt-1 text-sm text-[#9CA3AF]">
             {t('dashboard.subtitle')}
           </p>
         </div>
@@ -50,32 +50,35 @@ export default function DashboardPage() {
             <button
               type="button"
               onClick={openSlotModal}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#D97757] hover:bg-[#C46647] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors cursor-pointer"
+              className="crimson-glow-btn inline-flex items-center gap-1.5 rounded-xl px-4 py-2.5 text-xs font-semibold cursor-pointer"
             >
               <Sparkles className="h-4 w-4" />
               {t('nav.unlockPro')}
             </button>
           )}
           <Link
-            to="/"
-            className="inline-flex items-center gap-1.5 rounded-xl border border-[#3A3834] bg-[#2A2926] hover:bg-[#3A3834]/50 px-4 py-2.5 text-sm font-medium text-[#EAE6DF] shadow-sm transition-colors cursor-pointer"
+            to="/practice"
+            className="inline-flex items-center gap-1.5 rounded-xl obsidian-glass hover:bg-white/[0.06] px-4 py-2.5 text-xs font-medium text-[#F4F5F7] transition-colors cursor-pointer"
           >
-            <Mic className="h-4 w-4 text-[#D97757]" />
+            <Mic className="h-4 w-4 text-[#FF6363]" />
             {t('dashboard.newSession')}
           </Link>
         </div>
       </div>
 
       {error && (
-        <div className="mb-6 flex items-center justify-between rounded-xl border border-[#D97757]/40 bg-[#D97757]/15 px-4 py-3 text-sm text-[#EAE6DF]">
+        <div
+          role="alert"
+          className="mb-6 flex items-center justify-between rounded-xl border border-[#FF6363]/50 bg-[#FF6363]/12 px-4 py-3 text-sm text-[#FCA5A5]"
+        >
           <span>{error}</span>
           <button
             type="button"
             onClick={fetchPresentations}
-            className="inline-flex items-center gap-1 font-semibold underline cursor-pointer"
+            className="inline-flex items-center gap-1.5 font-semibold text-[#F4F5F7] hover:underline cursor-pointer"
           >
             <RefreshCw className="h-3.5 w-3.5" />
-            Retry
+            {t('common.retry')}
           </button>
         </div>
       )}
@@ -86,11 +89,11 @@ export default function DashboardPage() {
             {[1, 2, 3].map((n) => (
               <div
                 key={n}
-                className="h-28 rounded-2xl border border-[#3A3834] bg-[#2A2926] animate-pulse"
+                className="h-28 rounded-2xl obsidian-glass animate-pulse"
               />
             ))}
           </div>
-          <div className="h-64 rounded-2xl border border-[#3A3834] bg-[#2A2926] animate-pulse" />
+          <div className="h-64 rounded-2xl obsidian-glass animate-pulse" />
         </div>
       ) : (
         <div className="space-y-6">

@@ -24,54 +24,60 @@ export default function StatsOverview({ stats, isPro, onUnlockClick }) {
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
       {/* Card 1: Total Practice Time */}
-      <div className="rounded-2xl border border-[#3A3834] bg-[#2A2926] p-5 shadow-sm">
+      <div
+        style={{ '--stagger-index': 0 }}
+        className="stagger-item obsidian-glass rounded-2xl p-5 shadow-lg"
+      >
         <div className="flex items-center justify-between">
-          <span className="text-xs font-semibold uppercase tracking-wider text-[#9E9A92]">
+          <span className="text-xs font-semibold uppercase tracking-wider text-[#9CA3AF]">
             {t('dashboard.totalTime')}
           </span>
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#D97757]/15 text-[#D97757]">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#FF6363]/15 border border-[#FF6363]/30 text-[#FF6363]">
             <Clock className="h-4 w-4" />
           </div>
         </div>
-        <div className="mt-3 flex items-baseline gap-2">
-          <span className="font-editorial text-3xl font-semibold text-[#EAE6DF]">
+        <div className="mt-3 flex items-baseline gap-2.5">
+          <span className="font-mono text-3xl font-bold text-[#F4F5F7] tabular-nums">
             {formatTotalTime(totalPracticeSec, t)}
           </span>
-          <span className="text-xs text-[#9E9A92]">
+          <span className="text-xs font-mono text-[#9CA3AF]">
             {t('dashboard.totalSessions')}: {totalSessions}
           </span>
         </div>
       </div>
 
       {/* Card 2: Average WPM */}
-      <div className="relative overflow-hidden rounded-2xl border border-[#3A3834] bg-[#2A2926] p-5 shadow-sm">
+      <div
+        style={{ '--stagger-index': 1 }}
+        className="stagger-item relative overflow-hidden obsidian-glass rounded-2xl p-5 shadow-lg"
+      >
         <div className="flex items-center justify-between">
-          <span className="text-xs font-semibold uppercase tracking-wider text-[#9E9A92]">
+          <span className="text-xs font-semibold uppercase tracking-wider text-[#9CA3AF]">
             {t('dashboard.avgWpm')}
           </span>
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#4A8B6F]/15 text-[#4A8B6F]">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#10B981]/15 border border-[#10B981]/30 text-[#10B981]">
             <Gauge className="h-4 w-4" />
           </div>
         </div>
         <div className="mt-3">
           {isPro ? (
             <div className="flex items-baseline gap-2">
-              <span className="font-editorial text-3xl font-semibold text-[#EAE6DF]">
+              <span className="font-mono text-3xl font-bold text-[#F4F5F7] tabular-nums">
                 {avgWpm !== null && avgWpm !== undefined ? Math.round(avgWpm) : '—'}
               </span>
-              <span className="text-xs text-[#9E9A92]">{t('common.wpm')}</span>
+              <span className="text-xs font-mono text-[#9CA3AF]">{t('common.wpm')}</span>
             </div>
           ) : (
             <button
               type="button"
               onClick={onUnlockClick}
-              className="group flex items-center gap-2 text-left cursor-pointer"
+              className="group flex items-center gap-2.5 text-left cursor-pointer"
             >
-              <span className="font-editorial text-3xl font-semibold text-[#EAE6DF]/25 blur-[4px] select-none">
+              <span className="font-mono text-3xl font-bold text-[#F4F5F7]/20 blur-[5px] select-none">
                 138
               </span>
-              <span className="inline-flex items-center gap-1 rounded-full border border-[#D97757]/35 bg-[#D97757]/15 px-2.5 py-0.5 text-xs font-medium text-[#D97757] group-hover:bg-[#D97757]/25 transition-colors">
-                <Lock className="h-3 w-3" />
+              <span className="inline-flex items-center gap-1 rounded-full border border-[#FF6363]/40 bg-[#FF6363]/15 px-2.5 py-0.5 text-xs font-medium text-[#FCA5A5] group-hover:bg-[#FF6363]/25 transition-colors">
+                <Lock className="h-3 w-3 text-[#FF6363]" />
                 {t('nav.unlockPro')}
               </span>
             </button>
@@ -80,36 +86,39 @@ export default function StatsOverview({ stats, isPro, onUnlockClick }) {
       </div>
 
       {/* Card 3: Average Pauses */}
-      <div className="relative overflow-hidden rounded-2xl border border-[#3A3834] bg-[#2A2926] p-5 shadow-sm">
+      <div
+        style={{ '--stagger-index': 2 }}
+        className="stagger-item relative overflow-hidden obsidian-glass rounded-2xl p-5 shadow-lg"
+      >
         <div className="flex items-center justify-between">
-          <span className="text-xs font-semibold uppercase tracking-wider text-[#9E9A92]">
+          <span className="text-xs font-semibold uppercase tracking-wider text-[#9CA3AF]">
             {t('dashboard.avgPauses')}
           </span>
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#D97757]/15 text-[#D97757]">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#8B5CF6]/15 border border-[#8B5CF6]/30 text-[#A78BFA]">
             <PauseCircle className="h-4 w-4" />
           </div>
         </div>
         <div className="mt-3">
           {isPro ? (
             <div className="flex items-baseline gap-2">
-              <span className="font-editorial text-3xl font-semibold text-[#EAE6DF]">
+              <span className="font-mono text-3xl font-bold text-[#F4F5F7] tabular-nums">
                 {avgPauses !== null && avgPauses !== undefined
                   ? Number(avgPauses).toFixed(1)
                   : '—'}
               </span>
-              <span className="text-xs text-[#9E9A92]">&gt;1.5{t('common.sec')}</span>
+              <span className="text-xs font-mono text-[#9CA3AF]">&gt;1.5{t('common.sec')}</span>
             </div>
           ) : (
             <button
               type="button"
               onClick={onUnlockClick}
-              className="group flex items-center gap-2 text-left cursor-pointer"
+              className="group flex items-center gap-2.5 text-left cursor-pointer"
             >
-              <span className="font-editorial text-3xl font-semibold text-[#EAE6DF]/25 blur-[4px] select-none">
+              <span className="font-mono text-3xl font-bold text-[#F4F5F7]/20 blur-[5px] select-none">
                 2.4
               </span>
-              <span className="inline-flex items-center gap-1 rounded-full border border-[#D97757]/35 bg-[#D97757]/15 px-2.5 py-0.5 text-xs font-medium text-[#D97757] group-hover:bg-[#D97757]/25 transition-colors">
-                <Lock className="h-3 w-3" />
+              <span className="inline-flex items-center gap-1 rounded-full border border-[#FF6363]/40 bg-[#FF6363]/15 px-2.5 py-0.5 text-xs font-medium text-[#FCA5A5] group-hover:bg-[#FF6363]/25 transition-colors">
+                <Lock className="h-3 w-3 text-[#FF6363]" />
                 {t('nav.unlockPro')}
               </span>
             </button>

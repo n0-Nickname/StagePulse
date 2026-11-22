@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
+import { Play, Pause, RotateCcw, CheckCircle2 } from 'lucide-react';
 import { useTranslation } from '../context/LanguageContext.jsx';
 
-const PRESET_MINUTES = [1, 3, 5, 10, 15];
+const PRESET_MINUTES = [1, 3, 5, 10];
 
 function formatTime(sec) {
   const isNegative = sec < 0;
@@ -40,40 +41,45 @@ export default function TimerControls({
 
   const statusColor =
     timerStatus === 'overtime'
-      ? 'text-[#D97757]'
+      ? 'text-[#FF6363]'
       : timerStatus === 'warning'
-      ? 'text-[#D49A42]'
-      : 'text-[#EAE6DF]';
+      ? 'text-[#F59E0B]'
+      : 'text-[#F4F5F7]';
 
   const barColor =
     timerStatus === 'overtime'
-      ? 'bg-[#D97757]'
+      ? 'bg-[#FF6363] shadow-[0_0_16px_rgba(255,99,99,0.5)]'
       : timerStatus === 'warning'
-      ? 'bg-[#D49A42]'
-      : 'bg-[#4A8B6F]';
+      ? 'bg-[#F59E0B] shadow-[0_0_14px_rgba(245,158,11,0.4)]'
+      : 'bg-[#10B981] shadow-[0_0_14px_rgba(16,185,129,0.35)]';
 
   return (
-    <div className="rounded-xl bg-[#2A2926] border border-[#3A3834] p-6 space-y-6">
+    <div className="obsidian-glass rounded-2xl p-6 space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <div className="text-xs text-[#9E9A92]">{t('timer.timeRemaining')}</div>
+          <div className="text-xs font-medium uppercase tracking-wider text-[#9CA3AF]">
+            {t('timer.timeRemaining')}
+          </div>
           <div
-            className={`mt-1 text-5xl sm:text-6xl font-medium tabular-nums tracking-tight font-['Lora','Newsreader',serif] ${statusColor}`}
+            data-testid="timer-display"
+            className={`mt-1.5 text-5xl sm:text-6xl font-bold font-mono tabular-nums tracking-tight ${statusColor}`}
           >
             {formatTime(remainingSec)}
           </div>
-          <div className="mt-1 text-xs text-[#9E9A92] tabular-nums">
-            {t('timer.elapsed')} {formatTime(elapsedSec)} {t('timer.of')} {formatTime(targetDurationSec)}
+          <div className="mt-1.5 text-xs font-mono text-[#9CA3AF] tabular-nums">
+            {t('timer.elapsed')} {formatTime(elapsedSec)} {t('timer.of')}{' '}
+            {formatTime(targetDurationSec)}
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2.5">
           {!isRunning && !isPaused && (
             <button
               type="button"
               onClick={onStart}
-              className="px-5 py-2.5 rounded-lg text-sm font-medium bg-[#D97757] hover:bg-[#C46647] text-white transition-colors cursor-pointer"
+              className="crimson-glow-btn inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold cursor-pointer"
             >
+              <Play className="h-4 w-4 fill-current" />
               {t('timer.start')}
             </button>
           )}
@@ -81,8 +87,9 @@ export default function TimerControls({
             <button
               type="button"
               onClick={onPause}
-              className="px-5 py-2.5 rounded-lg text-sm font-medium bg-[#1E1D1B] hover:bg-[#3A3834] border border-[#3A3834] text-[#EAE6DF] transition-colors cursor-pointer"
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium obsidian-inset hover:bg-white/[0.06] text-[#F4F5F7] transition-colors cursor-pointer"
             >
+              <Pause className="h-4 w-4" />
               {t('timer.pause')}
             </button>
           )}
@@ -90,8 +97,9 @@ export default function TimerControls({
             <button
               type="button"
               onClick={onResume}
-              className="px-5 py-2.5 rounded-lg text-sm font-medium bg-[#D97757] hover:bg-[#C46647] text-white transition-colors cursor-pointer"
+              className="crimson-glow-btn inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold cursor-pointer"
             >
+              <Play className="h-4 w-4 fill-current" />
               {t('timer.resume')}
             </button>
           )}
@@ -100,15 +108,17 @@ export default function TimerControls({
               <button
                 type="button"
                 onClick={onFinish}
-                className="px-4 py-2.5 rounded-lg text-sm font-medium bg-[#4A8B6F] hover:bg-[#3E775E] text-white transition-colors cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-semibold bg-[#10B981] hover:bg-[#059669] text-white shadow-[0_0_18px_rgba(16,185,129,0.3)] transition-colors cursor-pointer"
               >
+                <CheckCircle2 className="h-4 w-4" />
                 {t('timer.finishAndSave')}
               </button>
               <button
                 type="button"
                 onClick={onReset}
-                className="px-4 py-2.5 rounded-lg text-sm font-medium text-[#9E9A92] hover:text-[#EAE6DF] hover:bg-[#1E1D1B] transition-colors cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-sm font-medium text-[#9CA3AF] hover:text-[#F4F5F7] hover:bg-white/[0.06] transition-colors cursor-pointer"
               >
+                <RotateCcw className="h-3.5 w-3.5" />
                 {t('common.reset')}
               </button>
             </>
@@ -116,27 +126,28 @@ export default function TimerControls({
         </div>
       </div>
 
-      <div className="w-full h-2 rounded-full bg-[#1E1D1B] overflow-hidden border border-[#3A3834]">
+      <div className="w-full h-2 rounded-full obsidian-inset overflow-hidden">
         <div
           className={`h-full transition-all duration-300 ${barColor}`}
           style={{ width: `${Math.min(100, Math.max(0, progressPct))}%` }}
         />
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-[#3A3834]">
+      <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-white/[0.08]">
         <div className="flex flex-wrap items-center gap-1.5">
           {PRESET_MINUTES.map((mins) => {
             const sec = mins * 60;
+            const active = targetDurationSec === sec;
             return (
               <button
                 key={sec}
                 type="button"
                 disabled={isRunning}
                 onClick={() => onSetTargetDuration(sec)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
-                  targetDurationSec === sec
-                    ? 'bg-[#D97757]/15 border-[#D97757]/60 text-[#D97757]'
-                    : 'bg-[#1E1D1B] border-[#3A3834] text-[#9E9A92] hover:text-[#EAE6DF]'
+                className={`px-3 py-1.5 rounded-lg text-xs font-mono font-medium border transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed ${
+                  active
+                    ? 'bg-[#FF6363]/15 border-[#FF6363]/60 text-[#FF6363]'
+                    : 'obsidian-inset text-[#9CA3AF] hover:text-[#F4F5F7]'
                 }`}
               >
                 {t(`timer.presets.${mins}`)}
@@ -155,12 +166,13 @@ export default function TimerControls({
             value={customMin}
             onChange={(e) => setCustomMin(e.target.value)}
             placeholder={t('timer.customMinPlaceholder')}
-            className="w-28 rounded-lg bg-[#1E1D1B] border border-[#3A3834] px-2.5 py-1.5 text-xs text-[#EAE6DF] placeholder-[#9E9A92]/60 focus:outline-none focus:border-[#D97757] disabled:opacity-50"
+            aria-label={t('timer.customMinPlaceholder')}
+            className="w-28 rounded-lg obsidian-inset px-2.5 py-1.5 text-xs font-mono text-[#F4F5F7] placeholder-[#6B7280] focus:outline-none focus:border-[#FF6363] disabled:opacity-50"
           />
           <button
             type="submit"
             disabled={isRunning || !customMin}
-            className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[#1E1D1B] border border-[#3A3834] text-[#EAE6DF] hover:bg-[#3A3834] disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+            className="px-3 py-1.5 rounded-lg text-xs font-medium obsidian-inset text-[#F4F5F7] hover:bg-white/[0.08] disabled:opacity-45 cursor-pointer disabled:cursor-not-allowed transition-colors"
           >
             {t('timer.set')}
           </button>

@@ -2,10 +2,10 @@ import React, { useState } from 'react';
 import { Lock, Sparkles, Calendar, ChevronDown, ChevronRight } from 'lucide-react';
 import { useTranslation } from '../context/LanguageContext.jsx';
 
-function formatDuration(sec) {
-  if (sec === null || sec === undefined) return '0:00';
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
+function formatDuration(seconds) {
+  if (seconds === null || seconds === undefined) return '0:00';
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
@@ -65,7 +65,7 @@ function PacingCurveSvg({ timeline }) {
   return (
     <svg
       viewBox={`0 0 ${width} ${height}`}
-      className="h-24 w-full overflow-visible rounded-lg bg-[#1E1D1B]/80 border border-[#3A3834]"
+      className="h-24 w-full overflow-visible rounded-xl obsidian-inset"
       role="img"
       aria-label="Pacing curve"
     >
@@ -74,12 +74,12 @@ function PacingCurveSvg({ timeline }) {
         y={optTop}
         width={width - padX * 2}
         height={Math.max(0, optBottom - optTop)}
-        fill="#4A8B6F"
+        fill="#10B981"
         fillOpacity="0.14"
       />
       <polyline
         fill="none"
-        stroke="#D97757"
+        stroke="#FF6363"
         strokeWidth="2.2"
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -91,8 +91,8 @@ function PacingCurveSvg({ timeline }) {
           cx={toX(i)}
           cy={toY(p.wpm || 0)}
           r="2.8"
-          fill="#EAE6DF"
-          stroke="#D97757"
+          fill="#F4F5F7"
+          stroke="#FF6363"
           strokeWidth="1.5"
         />
       ))}
@@ -112,41 +112,41 @@ export default function HistoryTable({
   const TIMING_BADGES = {
     on_time: {
       label: t('dashboard.onTime'),
-      cls: 'bg-[#4A8B6F]/15 text-[#4A8B6F] border-[#4A8B6F]/30',
+      cls: 'bg-[#10B981]/15 text-[#10B981] border-[#10B981]/30',
     },
     under_time: {
       label: t('dashboard.onTime'),
-      cls: 'bg-[#D49A42]/15 text-[#D49A42] border-[#D49A42]/30',
+      cls: 'bg-[#F59E0B]/15 text-[#F59E0B] border-[#F59E0B]/30',
     },
     overtime: {
       label: t('dashboard.overtime'),
-      cls: 'bg-[#D97757]/15 text-[#D97757] border-[#D97757]/30',
+      cls: 'bg-[#FF6363]/15 text-[#FF6363] border-[#FF6363]/30',
     },
   };
 
   const PACING_BADGES = {
     optimal: {
       label: t('dashboard.paceOptimal'),
-      cls: 'bg-[#4A8B6F]/15 text-[#4A8B6F] border-[#4A8B6F]/30',
+      cls: 'bg-[#10B981]/15 text-[#10B981] border-[#10B981]/30',
     },
     too_slow: {
       label: t('dashboard.paceSlow'),
-      cls: 'bg-[#D49A42]/15 text-[#D49A42] border-[#D49A42]/30',
+      cls: 'bg-[#F59E0B]/15 text-[#F59E0B] border-[#F59E0B]/30',
     },
     too_fast: {
       label: t('dashboard.paceFast'),
-      cls: 'bg-[#D97757]/15 text-[#D97757] border-[#D97757]/30',
+      cls: 'bg-[#FF6363]/15 text-[#FF6363] border-[#FF6363]/30',
     },
   };
 
   if (items.length === 0) {
     return (
-      <div className="rounded-2xl border border-[#3A3834] bg-[#2A2926] p-10 text-center shadow-sm">
-        <Calendar className="mx-auto h-8 w-8 text-[#9E9A92]/60" />
-        <h3 className="mt-3 font-editorial text-xl font-semibold text-[#EAE6DF]">
+      <div className="obsidian-glass rounded-2xl p-10 text-center shadow-lg">
+        <Calendar className="mx-auto h-8 w-8 text-[#9CA3AF]/60" />
+        <h3 className="mt-3 text-xl font-semibold text-[#F4F5F7]">
           {t('dashboard.historyTitle')}
         </h3>
-        <p className="mt-1 text-sm text-[#9E9A92]">
+        <p className="mt-1 text-sm text-[#9CA3AF]">
           {t('dashboard.emptyHistory')}
         </p>
       </div>
@@ -154,11 +154,11 @@ export default function HistoryTable({
   }
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-[#3A3834] bg-[#2A2926] shadow-sm">
+    <div className="overflow-hidden rounded-2xl obsidian-glass shadow-lg">
       <div className="overflow-x-auto">
         <table className="w-full border-collapse text-left text-sm">
           <thead>
-            <tr className="border-b border-[#3A3834] bg-[#1E1D1B]/60 text-xs font-semibold uppercase tracking-wider text-[#9E9A92]">
+            <tr className="border-b border-white/[0.08] bg-[#0B0C10]/70 text-xs font-semibold uppercase tracking-wider text-[#9CA3AF]">
               <th className="px-5 py-3.5">{t('dashboard.colTitle')}</th>
               <th className="px-4 py-3.5">{t('dashboard.colDuration')}</th>
               <th className="px-4 py-3.5">{t('dashboard.colStatus')}</th>
@@ -167,8 +167,8 @@ export default function HistoryTable({
               <th className="px-5 py-3.5 text-right">{t('dashboard.colDate')}</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-[#3A3834]">
-            {items.map((item) => {
+          <tbody className="divide-y divide-white/[0.08]">
+            {items.map((item, idx) => {
               const timing = TIMING_BADGES[item.timing_status] || TIMING_BADGES.on_time;
               const pacing = PACING_BADGES[item.pacing_status];
               const locked = !isPro || item.is_analytics_locked;
@@ -184,27 +184,28 @@ export default function HistoryTable({
               return (
                 <React.Fragment key={item.id}>
                   <tr
+                    style={{ '--stagger-index': idx + 3 }}
                     onClick={() => setExpandedId(isExpanded ? null : item.id)}
-                    className="cursor-pointer transition-colors hover:bg-[#1E1D1B]/40"
+                    className="stagger-item cursor-pointer transition-colors hover:bg-white/[0.04]"
                   >
-                    <td className="px-5 py-4 font-medium text-[#EAE6DF]">
+                    <td className="px-5 py-4 font-medium text-[#F4F5F7]">
                       <div className="flex items-center gap-2">
                         {isExpanded ? (
-                          <ChevronDown className="h-4 w-4 shrink-0 text-[#9E9A92]" />
+                          <ChevronDown className="h-4 w-4 shrink-0 text-[#9CA3AF]" />
                         ) : (
-                          <ChevronRight className="h-4 w-4 shrink-0 text-[#9E9A92]" />
+                          <ChevronRight className="h-4 w-4 shrink-0 text-[#9CA3AF]" />
                         )}
                         <span>{item.title}</span>
                         {scoreVal !== null && (
-                          <span className="ml-1 inline-flex items-center rounded-md border border-[#3A3834] bg-[#1E1D1B] px-1.5 py-0.5 text-[11px] font-semibold text-[#EAE6DF]">
+                          <span className="ml-1 inline-flex items-center rounded-md border border-white/[0.08] bg-[#0B0C10] px-1.5 py-0.5 text-[11px] font-mono font-semibold text-[#F4F5F7]">
                             {scoreVal}/100
                           </span>
                         )}
                       </div>
                     </td>
-                    <td className="px-4 py-4 font-mono text-xs text-[#9E9A92]">
+                    <td className="px-4 py-4 font-mono text-xs text-[#9CA3AF]">
                       {formatDuration(item.actual_duration_sec)}{' '}
-                      <span className="text-[#9E9A92]/60">
+                      <span className="text-[#6B7280]">
                         / {formatDuration(item.target_duration_sec)}
                       </span>
                     </td>
@@ -223,14 +224,14 @@ export default function HistoryTable({
                             e.stopPropagation();
                             onUnlockClick?.();
                           }}
-                          className="inline-flex items-center gap-1.5 text-xs text-[#9E9A92] hover:text-[#D97757] cursor-pointer"
+                          className="inline-flex items-center gap-1.5 text-xs text-[#9CA3AF] hover:text-[#FF6363] cursor-pointer"
                         >
-                          <span className="blur-[4px] select-none">142</span>
-                          <Lock className="h-3 w-3 text-[#D97757]" />
+                          <span className="font-mono blur-[4px] select-none">142</span>
+                          <Lock className="h-3 w-3 text-[#FF6363]" />
                         </button>
                       ) : (
                         <div className="flex items-center gap-2">
-                          <span className="font-semibold text-[#EAE6DF]">
+                          <span className="font-mono font-semibold text-[#F4F5F7]">
                             {item.wpm !== null && item.wpm !== undefined
                               ? Math.round(item.wpm)
                               : '—'}
@@ -253,67 +254,67 @@ export default function HistoryTable({
                             e.stopPropagation();
                             onUnlockClick?.();
                           }}
-                          className="inline-flex items-center gap-1.5 text-xs text-[#9E9A92] hover:text-[#D97757] cursor-pointer"
+                          className="inline-flex items-center gap-1.5 text-xs text-[#9CA3AF] hover:text-[#FF6363] cursor-pointer"
                         >
-                          <span className="blur-[4px] select-none">2 (4.1s)</span>
-                          <Lock className="h-3 w-3 text-[#D97757]" />
+                          <span className="font-mono blur-[4px] select-none">2 (4.1s)</span>
+                          <Lock className="h-3 w-3 text-[#FF6363]" />
                         </button>
                       ) : (
-                        <span className="text-[#EAE6DF]">
+                        <span className="font-mono text-[#F4F5F7]">
                           {item.pause_count ?? 0}{' '}
-                          <span className="text-xs text-[#9E9A92]">
+                          <span className="text-xs text-[#9CA3AF]">
                             ({Number(item.total_pause_sec ?? 0).toFixed(1)}{t('common.sec')})
                           </span>
                         </span>
                       )}
                     </td>
-                    <td className="px-5 py-4 text-right text-xs text-[#9E9A92]">
+                    <td className="px-5 py-4 text-right font-mono text-xs text-[#9CA3AF]">
                       {formatDate(item.created_at, lang)}
                     </td>
                   </tr>
 
                   {isExpanded && (
-                    <tr className="bg-[#1E1D1B]/50">
+                    <tr className="bg-[#0B0C10]/65">
                       <td colSpan={6} className="px-5 py-4">
                         <div className="space-y-4">
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-[#3A3834] bg-[#2A2926]/80 p-3.5">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-[#121317]/90 p-3.5">
                             <div className="space-y-1">
-                              <div className="text-xs font-semibold uppercase tracking-wider text-[#9E9A92]">
-                                {lang === 'uk' ? 'Вердикт професора' : 'Professor Verdict'}
+                              <div className="text-xs font-semibold uppercase tracking-wider text-[#F59E0B]">
+                                {t('dashboard.verdictTitle')}
                               </div>
-                              <p className="text-sm text-[#EAE6DF]">
-                                {item.verdict || (lang === 'uk' ? 'Немає коментаря.' : 'No verdict recorded.')}
+                              <p className="text-sm text-[#F4F5F7]">
+                                {item.verdict || t('dashboard.noVerdict')}
                               </p>
                             </div>
                             <div className="shrink-0 text-right">
-                              <div className="text-xs uppercase tracking-wider text-[#9E9A92]">
-                                {lang === 'uk' ? 'Оцінка' : 'Score'}
+                              <div className="text-xs uppercase tracking-wider text-[#9CA3AF]">
+                                {t('dashboard.scoreTitle')}
                               </div>
-                              <div className="font-editorial text-2xl font-bold text-[#EAE6DF]">
+                              <div className="font-mono text-2xl font-bold text-[#FF6363]">
                                 {scoreVal !== null ? `${scoreVal}` : '—'}
-                                <span className="text-xs font-normal text-[#9E9A92]">/100</span>
+                                <span className="text-xs font-normal text-[#9CA3AF]">/100</span>
                               </div>
                             </div>
                           </div>
 
-                          <div className="relative rounded-xl border border-[#3A3834] bg-[#2A2926]/60 p-3.5">
+                          <div className="relative rounded-xl border border-white/[0.08] bg-[#121317]/75 p-3.5">
                             <div
                               className={`grid grid-cols-1 md:grid-cols-2 gap-4 ${
                                 locked ? 'blur-[5px] select-none pointer-events-none' : ''
                               }`}
                             >
                               <div>
-                                <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-[#9E9A92]">
-                                  {lang === 'uk' ? 'Крива темпу (WPM)' : 'Pacing Curve (WPM)'}
+                                <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-[#9CA3AF]">
+                                  {t('dashboard.pacingCurveTitle')}
                                 </div>
                                 <PacingCurveSvg timeline={locked ? [] : timeline} />
                               </div>
 
                               <div>
-                                <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-[#9E9A92]">
-                                  {lang === 'uk' ? 'Слова-паразити' : 'Top Filler Words'}
+                                <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-[#9CA3AF]">
+                                  {t('dashboard.fillersTitle')}
                                   {!locked && item.filler_count !== null && item.filler_count !== undefined && (
-                                    <span className="ml-2 text-[#EAE6DF]">({item.filler_count})</span>
+                                    <span className="ml-2 font-mono text-[#F4F5F7]">({item.filler_count})</span>
                                   )}
                                 </div>
                                 {fillerEntries.length > 0 ? (
@@ -321,29 +322,27 @@ export default function HistoryTable({
                                     {fillerEntries.map(([word, count]) => (
                                       <span
                                         key={word}
-                                        className="inline-flex items-center gap-1.5 rounded-full border border-[#D97757]/40 bg-[#D97757]/15 px-2.5 py-1 text-xs font-medium text-[#EAE6DF]"
+                                        className="inline-flex items-center gap-1.5 rounded-full border border-[#FF6363]/40 bg-[#FF6363]/15 px-2.5 py-1 text-xs font-medium text-[#F4F5F7]"
                                       >
                                         <span>{word}</span>
-                                        <span className="font-mono text-[#D97757]">×{count}</span>
+                                        <span className="font-mono text-[#FF6363]">×{count}</span>
                                       </span>
                                     ))}
                                   </div>
                                 ) : (
-                                  <p className="text-xs text-[#9E9A92]">
-                                    {lang === 'uk'
-                                      ? 'Слів-паразитів не виявлено.'
-                                      : 'No filler words detected.'}
+                                  <p className="text-xs text-[#10B981]">
+                                    {t('dashboard.noFillers')}
                                   </p>
                                 )}
                               </div>
                             </div>
 
                             {locked && (
-                              <div className="absolute inset-0 flex items-center justify-center rounded-xl bg-[#1E1D1B]/45">
+                              <div className="absolute inset-0 flex items-center justify-center rounded-xl bg-[#07080A]/55 backdrop-blur-[2px]">
                                 <button
                                   type="button"
                                   onClick={onUnlockClick}
-                                  className="inline-flex items-center gap-2 rounded-xl bg-[#D97757] hover:bg-[#C46647] px-4 py-2 text-xs font-semibold text-white shadow-md transition-colors cursor-pointer"
+                                  className="crimson-glow-btn inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold cursor-pointer"
                                 >
                                   <Sparkles className="h-3.5 w-3.5" />
                                   {t('nav.unlockPro')}
@@ -363,11 +362,11 @@ export default function HistoryTable({
       </div>
 
       {!isPro && lockedHistoryCount > 0 && (
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-[#3A3834] bg-[#1E1D1B]/60 px-5 py-4">
-          <div className="flex items-center gap-2.5 text-sm text-[#9E9A92]">
-            <Lock className="h-4 w-4 text-[#D97757] shrink-0" />
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-white/[0.08] bg-[#0B0C10]/70 px-5 py-4">
+          <div className="flex items-center gap-2.5 text-sm text-[#9CA3AF]">
+            <Lock className="h-4 w-4 text-[#FF6363] shrink-0" />
             <span>
-              <strong className="font-semibold text-[#EAE6DF]">
+              <strong className="font-mono font-semibold text-[#F4F5F7]">
                 +{lockedHistoryCount}
               </strong>{' '}
               {t('slots.subtitle')}
@@ -376,7 +375,7 @@ export default function HistoryTable({
           <button
             type="button"
             onClick={onUnlockClick}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-[#D97757] hover:bg-[#C46647] px-4 py-2 text-xs font-semibold text-white shadow-sm transition-colors cursor-pointer shrink-0"
+            className="crimson-glow-btn inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-semibold cursor-pointer shrink-0"
           >
             <Sparkles className="h-3.5 w-3.5" />
             {t('nav.unlockPro')}

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Sparkles, Crown, RotateCw, Volume2, VolumeX } from 'lucide-react';
-import { slotsApi } from '../api/client.js';
+import { slotsApi, formatApiError } from '../api/client.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useTranslation } from '../context/LanguageContext.jsx';
 import {
@@ -25,7 +25,7 @@ const DEFAULT_REELS = ['DIAMOND', 'MIC', 'TIMER'];
 const REEL_HEIGHT_PX = 96; // h-24 = 96px
 const STOP_DURATIONS_MS = [1000, 1600, 2300];
 const FINALIZE_MS = 2350;
-const CONFETTI_COLORS = ['#FFD700', '#D97757', '#F7E7CE', '#4A8B6F'];
+const CONFETTI_COLORS = ['#F59E0B', '#FF6363', '#8B5CF6', '#10B981'];
 
 function buildStrip(targetSymbol, cycles = 3) {
   const strip = [];
@@ -98,7 +98,7 @@ export default function SlotMachineModal({ isOpen, onClose }) {
         vy: Math.sin(angle) * speed - 5,
         size: isCoin ? 7 + Math.random() * 4 : 6 + Math.random() * 6,
         color: isCoin
-          ? '#FFD700'
+          ? '#F59E0B'
           : CONFETTI_COLORS[Math.floor(Math.random() * CONFETTI_COLORS.length)],
         isCoin,
         rotation: Math.random() * Math.PI * 2,
@@ -141,7 +141,7 @@ export default function SlotMachineModal({ isOpen, onClose }) {
           ctx.beginPath();
           ctx.arc(0, 0, p.size, 0, Math.PI * 2);
           ctx.fill();
-          ctx.strokeStyle = '#F7E7CE';
+          ctx.strokeStyle = '#FEF3C7';
           ctx.lineWidth = 1.5;
           ctx.stroke();
         } else {
@@ -191,6 +191,17 @@ export default function SlotMachineModal({ isOpen, onClose }) {
     }
   }, [isOpen, user?.is_pro, stopConfetti]);
 
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape' && spinPhase !== 'spinning') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isOpen, spinPhase, onClose]);
+
   if (!isOpen) return null;
 
   const isSpinning = spinPhase === 'spinning';
@@ -204,7 +215,6 @@ export default function SlotMachineModal({ isOpen, onClose }) {
   const handleSpin = async () => {
     if (isSpinning) return;
 
-    // Unlock AudioContext synchronously on direct user gesture
     unlockAudio();
 
     timersRef.current.forEach((id) => clearTimeout(id));
@@ -241,7 +251,7 @@ export default function SlotMachineModal({ isOpen, onClose }) {
       });
 
       STOP_DURATIONS_MS.forEach((ms, idx) => {
-        const t = setTimeout(() => {
+        const timer = setTimeout(() => {
           playReelLock(idx, mutedRef.current);
           setSpinningReels((prev) => {
             const next = [...prev];
@@ -254,7 +264,7 @@ export default function SlotMachineModal({ isOpen, onClose }) {
             return next;
           });
         }, ms);
-        timersRef.current.push(t);
+        timersRef.current.push(timer);
       });
 
       const finalTimer = setTimeout(async () => {
@@ -288,13 +298,13 @@ export default function SlotMachineModal({ isOpen, onClose }) {
       }
       setSpinningReels([false, false, false]);
       setSpinPhase('idle');
-      setError(err?.message || t('slots.tryAgain'));
+      setError(formatApiError(err, t));
     }
   };
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+      className="modal-backdrop-in fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="slot-modal-title"
@@ -319,10 +329,10 @@ export default function SlotMachineModal({ isOpen, onClose }) {
 
       <div
         data-testid="slot-modal-card"
-        className={`relative w-full max-w-md overflow-hidden rounded-2xl border bg-[#2A2926] p-6 shadow-2xl transition-all ${
+        className={`modal-spring-in relative w-full max-w-md overflow-hidden rounded-2xl obsidian-glass p-6 shadow-2xl transition-all ${
           isJackpot
-            ? 'jackpot-frame-glow jackpot-shake border-[#FFD700]/80'
-            : 'border-[#3A3834]'
+            ? 'jackpot-frame-glow jackpot-shake border-[#F59E0B]/80'
+            : ''
         }`}
       >
         {/* Rotating Golden Sunburst behind housing on Jackpot */}
@@ -339,7 +349,7 @@ export default function SlotMachineModal({ isOpen, onClose }) {
             type="button"
             onClick={() => setMuted((prev) => !prev)}
             aria-label={muted ? 'Unmute sound' : 'Mute sound'}
-            className="rounded-lg p-1.5 text-[#9E9A92] hover:bg-[#3A3834] hover:text-[#EAE6DF] transition-colors cursor-pointer"
+            className="rounded-lg p-1.5 text-[#9CA3AF] hover:bg-white/[0.08] hover:text-[#F4F5F7] transition-colors cursor-pointer"
           >
             {muted ? (
               <VolumeX className="h-4 w-4" />
@@ -352,43 +362,43 @@ export default function SlotMachineModal({ isOpen, onClose }) {
             onClick={onClose}
             disabled={isSpinning}
             aria-label={t('common.close')}
-            className="rounded-lg p-1.5 text-[#9E9A92] hover:bg-[#3A3834] hover:text-[#EAE6DF] transition-colors cursor-pointer disabled:opacity-40"
+            className="rounded-lg p-1.5 text-[#9CA3AF] hover:bg-white/[0.08] hover:text-[#F4F5F7] transition-colors cursor-pointer disabled:opacity-40"
           >
             <X className="h-5 w-5" />
           </button>
         </div>
 
         <div className="relative z-10 text-center">
-          <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-[#D97757]/15 text-[#D97757]">
+          <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-[#FF6363]/15 border border-[#FF6363]/35 text-[#FF6363]">
             {isJackpot ? (
-              <Crown className="h-6 w-6 text-[#FFD700]" />
+              <Crown className="h-6 w-6 text-[#F59E0B]" />
             ) : (
               <Sparkles className="h-6 w-6" />
             )}
           </div>
           <h2
             id="slot-modal-title"
-            className="font-editorial text-2xl font-semibold text-[#EAE6DF]"
+            className="text-2xl font-bold tracking-tight text-[#F4F5F7]"
           >
             {isJackpot ? t('slots.jackpotTitle') : t('slots.title')}
           </h2>
-          <p className="mt-1 text-sm text-[#9E9A92]">
+          <p className="mt-1 text-sm text-[#9CA3AF]">
             {isJackpot ? t('slots.jackpotDesc') : t('slots.subtitle')}
           </p>
         </div>
 
         {/* 3-Reel Mechanical Slot Window */}
-        <div className="relative z-10 mt-6 grid grid-cols-3 gap-3 rounded-2xl border border-[#3A3834] bg-[#1E1D1B] p-4 shadow-inner">
+        <div className="relative z-10 mt-6 grid grid-cols-3 gap-3 rounded-2xl obsidian-inset p-4 shadow-inner">
           {strips.map((strip, idx) => {
             const spinning = spinningReels[idx];
             const landed = landedReels[idx];
             return (
               <div
                 key={idx}
-                className={`relative h-24 overflow-hidden rounded-xl border bg-[#2A2926] ${
+                className={`relative h-24 overflow-hidden rounded-xl border bg-[#121317] ${
                   isJackpot
-                    ? 'border-[#FFD700]/70 bg-[#FFD700]/10'
-                    : 'border-[#3A3834]'
+                    ? 'border-[#F59E0B]/70 bg-[#F59E0B]/10'
+                    : 'border-white/[0.08]'
                 }`}
               >
                 {isJackpot && (
@@ -427,7 +437,7 @@ export default function SlotMachineModal({ isOpen, onClose }) {
                         >
                           {sym.emoji}
                         </span>
-                        <span className="mt-1.5 text-[10px] font-semibold uppercase tracking-wider text-[#9E9A92]">
+                        <span className="mt-1.5 text-[10px] font-mono font-semibold uppercase tracking-wider text-[#9CA3AF]">
                           {sym.label}
                         </span>
                       </div>
@@ -441,7 +451,10 @@ export default function SlotMachineModal({ isOpen, onClose }) {
 
         {/* Status / Error Banner */}
         {error && (
-          <div className="relative z-10 mt-4 rounded-xl border border-[#D97757]/40 bg-[#D97757]/15 px-3.5 py-2.5 text-center text-xs font-medium text-[#EAE6DF]">
+          <div
+            role="alert"
+            className="relative z-10 mt-4 rounded-xl border border-[#FF6363]/50 bg-[#FF6363]/12 px-3.5 py-2.5 text-center text-xs font-medium text-[#FCA5A5]"
+          >
             {error}
           </div>
         )}
@@ -451,8 +464,8 @@ export default function SlotMachineModal({ isOpen, onClose }) {
             data-testid="slot-banner-message"
             className={`relative z-10 mt-4 rounded-xl border px-3.5 py-2.5 text-center text-xs font-semibold ${
               isJackpot
-                ? 'badge-slam-in border-[#FFD700]/50 bg-[#4A8B6F]/20 text-[#FFD700]'
-                : 'border-[#3A3834] bg-[#1E1D1B] text-[#9E9A92]'
+                ? 'badge-slam-in border-[#F59E0B]/60 bg-[#10B981]/20 text-[#FDE68A]'
+                : 'border-white/[0.08] bg-[#0B0C10] text-[#9CA3AF]'
             }`}
           >
             {bannerMessage}
@@ -465,7 +478,7 @@ export default function SlotMachineModal({ isOpen, onClose }) {
             type="button"
             onClick={handleSpin}
             disabled={isSpinning || (!user?.is_pro && spinsRemaining <= 0)}
-            className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#D97757] hover:bg-[#C46647] disabled:opacity-50 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-colors cursor-pointer"
+            className="crimson-glow-btn flex w-full items-center justify-center gap-2 rounded-xl disabled:opacity-50 px-4 py-3 text-sm font-semibold cursor-pointer"
           >
             <RotateCw className={`h-4 w-4 ${isSpinning ? 'animate-spin' : ''}`} />
             {isSpinning
@@ -479,7 +492,7 @@ export default function SlotMachineModal({ isOpen, onClose }) {
             <button
               type="button"
               onClick={onClose}
-              className="w-full rounded-xl bg-[#4A8B6F] hover:bg-[#3D765D] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors cursor-pointer"
+              className="w-full rounded-xl bg-[#10B981] hover:bg-[#059669] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors cursor-pointer"
             >
               {t('slots.done')}
             </button>

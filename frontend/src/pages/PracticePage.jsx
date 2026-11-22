@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Cpu, AlertCircle } from 'lucide-react';
 import { useTimer } from '../hooks/useTimer.js';
 import { useSpeechAnalytics } from '../hooks/useSpeechAnalytics.js';
 import { useTranslation } from '../context/LanguageContext.jsx';
-import { presentationsApi } from '../api/client.js';
+import { presentationsApi, formatApiError } from '../api/client.js';
 import { calculatePresentationScore, generateProfessorVerdict } from '../utils/roastGenerator.js';
 import TimerControls from '../components/TimerControls.jsx';
 import AudioVisualizer from '../components/AudioVisualizer.jsx';
@@ -76,20 +77,20 @@ export default function PracticePage() {
     analytics.resetAnalytics();
   };
 
-  const handleSaveSession = async ({ title, notes }) => {
+  const handleSaveSession = async ({ title }) => {
     if (!summaryData) return;
     setIsSaving(true);
     setSaveError(null);
     try {
       await presentationsApi.create({
         title,
-        notes,
         target_duration_sec: summaryData.targetDurationSec,
         actual_duration_sec: summaryData.actualDurationSec,
         word_count: summaryData.wordCount,
         wpm: summaryData.wpm,
         pause_count: summaryData.pauseCount,
-        total_pause_sec: Math.round(summaryData.totalPauseSec),
+        total_pause_sec: Number((summaryData.totalPauseSec || 0).toFixed(1)),
+        estimation_method: summaryData.estimationMethod || 'speech_api',
         score: summaryData.score,
         filler_count: summaryData.fillerCount,
         top_fillers_json: JSON.stringify(summaryData.fillerBreakdown || {}),
@@ -100,32 +101,32 @@ export default function PracticePage() {
       handleResetAll();
       navigate('/dashboard');
     } catch (err) {
-      setSaveError(err?.message || t('practice.saveError'));
+      setSaveError(formatApiError(err, t));
     } finally {
       setIsSaving(false);
     }
   };
 
   return (
-    <div className="max-w-5xl mx-auto px-4 py-8 space-y-6 font-['Inter',sans-serif] text-[#EAE6DF]">
-      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 pb-4 border-b border-[#3A3834]">
+    <div className="max-w-5xl mx-auto px-4 py-8 space-y-6 text-[#F4F5F7]">
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 pb-4 border-b border-white/[0.08]">
         <div>
-          <h1 className="text-3xl font-medium text-[#EAE6DF] tracking-tight font-['Lora','Newsreader',serif]">
+          <h1 className="text-3xl font-bold tracking-tight text-[#F4F5F7]">
             {t('practice.title')}
           </h1>
-          <p className="text-sm text-[#9E9A92] mt-1">
+          <p className="text-sm text-[#9CA3AF] mt-1">
             {t('practice.subtitle')}
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => analytics.setIsSimulatedMic((v) => !v)}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
               analytics.isSimulatedMic
-                ? 'bg-[#D97757]/15 border-[#D97757]/60 text-[#D97757]'
-                : 'bg-[#2A2926] border-[#3A3834] text-[#9E9A92] hover:text-[#EAE6DF]'
+                ? 'bg-[#FF6363]/15 border-[#FF6363]/60 text-[#FF6363]'
+                : 'obsidian-inset text-[#9CA3AF] hover:text-[#F4F5F7]'
             }`}
           >
             {analytics.isSimulatedMic ? t('practice.simMicOn') : t('practice.simMicOff')}
@@ -137,8 +138,8 @@ export default function PracticePage() {
               onClick={() => analytics.setIsSimulatingSilence((v) => !v)}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
                 analytics.isSimulatingSilence
-                  ? 'bg-[#D49A42]/15 border-[#D49A42] text-[#D49A42]'
-                  : 'bg-[#2A2926] border-[#3A3834] text-[#9E9A92] hover:text-[#EAE6DF]'
+                  ? 'bg-[#F59E0B]/15 border-[#F59E0B] text-[#F59E0B]'
+                  : 'obsidian-inset text-[#9CA3AF] hover:text-[#F4F5F7]'
               }`}
             >
               {analytics.isSimulatingSilence ? t('practice.simSilenceOn') : t('practice.simSilenceOff')}
@@ -147,9 +148,39 @@ export default function PracticePage() {
         </div>
       </div>
 
+      {/* Rust/WASM Local Speech Engine Status & Progress Bar */}
+      <div className="obsidian-glass rounded-xl px-4 py-3 space-y-2">
+        <div className="flex items-center justify-between text-xs">
+          <div className="flex items-center gap-2 text-[#C4B5FD] font-medium">
+            <Cpu className="h-3.5 w-3.5 text-[#8B5CF6]" />
+            <span>{t('practice.wasmEngineLabel')}</span>
+          </div>
+          <span className="font-mono text-[11px] text-[#10B981]">
+            {timer.isRunning ? t('practice.wasmActive') : t('practice.wasmReady')}
+          </span>
+        </div>
+        <div
+          data-testid="wasm-progress-bar"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={100}
+          className="h-1.5 w-full rounded-full obsidian-inset overflow-hidden"
+        >
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-[#8B5CF6] via-[#FF6363] to-[#10B981] transition-all duration-500"
+            style={{ width: '100%' }}
+          />
+        </div>
+      </div>
+
       {analytics.micError && (
-        <div className="rounded-lg bg-[#D97757]/15 border border-[#D97757]/50 px-4 py-3 text-sm text-[#F2A68D]">
-          {analytics.micError}
+        <div
+          role="alert"
+          className="flex items-center gap-2 rounded-xl bg-[#FF6363]/12 border border-[#FF6363]/50 px-4 py-3 text-xs font-medium text-[#FCA5A5]"
+        >
+          <AlertCircle className="h-4 w-4 shrink-0 text-[#FF6363]" />
+          <span>{analytics.micError}</span>
         </div>
       )}
 
@@ -186,17 +217,18 @@ export default function PracticePage() {
         wordCount={analytics.wordCount}
         pauseCount={analytics.pauseCount}
         totalPauseSec={analytics.totalPauseSec}
+        fillerCount={analytics.fillerCount}
         isSilentPause={analytics.isSilentPause}
         currentSilenceSec={analytics.currentSilenceSec}
         estimationMethod={analytics.estimationMethod}
       />
 
       {analytics.liveTranscript && (
-        <div className="rounded-xl bg-[#2A2926] border border-[#3A3834] p-4">
-          <div className="text-xs font-medium text-[#9E9A92] mb-1.5">
+        <div className="obsidian-glass rounded-2xl p-4">
+          <div className="text-xs font-medium text-[#9CA3AF] mb-1.5">
             {t('practice.liveTranscript')}
           </div>
-          <p className="text-sm text-[#EAE6DF] leading-relaxed">
+          <p className="text-sm text-[#F4F5F7] leading-relaxed">
             {analytics.liveTranscript}
           </p>
         </div>
