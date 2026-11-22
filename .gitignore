@@ -21,7 +21,12 @@ backend/.venv/
 node_modules/
 frontend/node_modules/
 frontend/dist/
+frontend/coverage/
+.vite/
 *.local
+
+# Agent memory
+.agents/memory/
 
 # Logs & OS
 *.log
