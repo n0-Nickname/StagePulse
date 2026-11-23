@@ -22,7 +22,7 @@ export class AsrEngineAdapter {
 
     const worker = this.workerFactory
       ? this.workerFactory()
-      : new globalThis.Worker(new URL('../workers/asr.worker.js', import.meta.url), {
+      : new Worker(new URL('../workers/asr.worker.js', import.meta.url), {
           type: 'module',
         });
 
