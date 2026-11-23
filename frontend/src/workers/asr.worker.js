@@ -106,7 +106,7 @@ function readCString(ptr) {
   while (end < mem.length && mem[end] !== 0) {
     end += 1;
   }
-  return textDecoder.decode(mem.subarray(ptr, end));
+  return textDecoder.decode(mem.slice(ptr, end));
 }
 
 function computeChunkRms(samples) {
