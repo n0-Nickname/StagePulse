@@ -43,14 +43,17 @@ async def test_first_spin_rng_threshold_matrix(
         assert len(set(data["reels"])) == 1
     else:
         assert len(set(data["reels"])) > 1
+    lowered_msg = data["message"].lower()
+    for forbidden in ("gacha", "jackpot", "pity", "guaranteed"):
+        assert forbidden not in lowered_msg
 
 
-async def test_guaranteed_third_spin_pity_and_idempotency(
+async def test_milestone_third_step_unlock_and_idempotency(
     async_client: AsyncClient,
     auth_headers_for: Callable[[str, str], Awaitable[dict[str, str]]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    headers = await auth_headers_for("pity@example.com", "password123")
+    headers = await auth_headers_for("milestone@example.com", "password123")
     monkeypatch.setattr("app.slots.router.random.random", lambda: 0.99)
 
     r1 = (await async_client.post("/api/slots/spin", headers=headers)).json()
@@ -72,6 +75,11 @@ async def test_guaranteed_third_spin_pity_and_idempotency(
     assert r4["spin_count"] == 3
     assert r4["spins_remaining"] == 0
     assert r4["message"] == "You already unlocked PRO!"
+
+    for msg in (r1["message"], r2["message"], r3["message"], r4["message"]):
+        lowered = msg.lower()
+        for forbidden in ("gacha", "jackpot", "pity", "guaranteed"):
+            assert forbidden not in lowered
 
     me = (await async_client.get("/api/auth/me", headers=headers)).json()
     assert me["is_pro"] is True

@@ -2,6 +2,7 @@ import pytest
 from httpx import AsyncClient
 
 
+@pytest.mark.asyncio
 async def test_full_user_journey_free_to_pro(
     async_client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
