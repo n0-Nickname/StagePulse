@@ -1,25 +1,53 @@
 import { createLogger } from '../utils/logger.js';
 
 export const TARGET_SAMPLE_RATE = 16000;
-export const CHUNK_SAMPLES = 640; // 40ms at 16kHz
+export const CHUNK_SAMPLES = 640; // 40ms at 16kHz (within 40-60ms batch window)
 export const SILENT_MIC_PEAK_THRESHOLD = 0.001;
 export const SILENT_MIC_CHECK_MS = 2000;
 const CHUNK_LOG_INTERVAL_MS = 2000;
+const AGC_TARGET_RMS = 0.08;
+const AGC_NOISE_GATE_RMS = 0.001;
+const AGC_MAX_GAIN = 12;
 
 const logger = createLogger('Audio:Mic');
 
-function clampSample(val) {
-  if (!Number.isFinite(val)) return 0;
-  if (val > 1) return 1;
-  if (val < -1) return -1;
-  return val;
+function sanitizeSample(val) {
+  return Number.isFinite(val) ? val : 0;
 }
 
-function clampBufferInPlace(samples) {
-  for (let i = 0; i < samples.length; i += 1) {
-    samples[i] = clampSample(samples[i]);
-  }
-  return samples;
+function clampSample(val) {
+  const s = sanitizeSample(val);
+  if (s > 1) return 1;
+  if (s < -1) return -1;
+  return s;
+}
+
+/**
+ * Lightweight AGC + tanh soft-limiter for speech frames.
+ * Leaves sub-threshold silence (<0.001 RMS) unamplified so dead-mic fallback remains accurate.
+ */
+export function createAgcProcessor({
+  targetRms = AGC_TARGET_RMS,
+  noiseGateRms = AGC_NOISE_GATE_RMS,
+  maxGain = AGC_MAX_GAIN,
+} = {}) {
+  let currentGain = 1;
+
+  return (samples) => {
+    for (let i = 0; i < samples.length; i += 1) {
+      samples[i] = sanitizeSample(samples[i]);
+    }
+    const rms = computeRms(samples);
+    const desiredGain =
+      rms >= noiseGateRms ? Math.min(maxGain, Math.max(1, targetRms / rms)) : 1;
+    const alpha = desiredGain > currentGain ? 0.25 : 0.4;
+    currentGain += (desiredGain - currentGain) * alpha;
+
+    for (let i = 0; i < samples.length; i += 1) {
+      samples[i] = Math.tanh(samples[i] * currentGain);
+    }
+    return samples;
+  };
 }
 
 export function computeRms(samples) {
@@ -55,6 +83,8 @@ export function createResampler(sourceRate, chunkSize, onChunk, onRms) {
   });
   let outBuffer = new Float32Array(chunkSize);
   let outOffset = 0;
+  let prev4 = 0;
+  let prev3 = 0;
   let prev2 = 0;
   let prev1 = 0;
   let phase = 0;
@@ -62,11 +92,16 @@ export function createResampler(sourceRate, chunkSize, onChunk, onRms) {
   return (input) => {
     if (!input || input.length === 0) return;
 
-    // 3-tap anti-aliasing filter [0.25, 0.5, 0.25] before decimation when ratio > 1
+    // 5-tap symmetric low-pass filter [0.06, 0.24, 0.40, 0.24, 0.06] before decimation
     const filtered = new Float32Array(input.length);
     for (let i = 0; i < input.length; i += 1) {
       const curr = input[i];
-      filtered[i] = ratio > 1.05 ? 0.25 * prev2 + 0.5 * prev1 + 0.25 * curr : curr;
+      filtered[i] =
+        ratio > 1.05
+          ? 0.06 * prev4 + 0.24 * prev3 + 0.4 * prev2 + 0.24 * prev1 + 0.06 * curr
+          : curr;
+      prev4 = prev3;
+      prev3 = prev2;
       prev2 = prev1;
       prev1 = curr;
     }
@@ -99,6 +134,8 @@ class TinyAsrResampleProcessor extends AudioWorkletProcessor {
     this._ratio = sampleRate / 16000;
     this._buffer = new Float32Array(640);
     this._offset = 0;
+    this._prev4 = 0;
+    this._prev3 = 0;
     this._prev2 = 0;
     this._prev1 = 0;
     this._phase = 0;
@@ -111,7 +148,11 @@ class TinyAsrResampleProcessor extends AudioWorkletProcessor {
     const applyFilter = this._ratio > 1.05;
     for (let i = 0; i < n; i++) {
       const curr = channel[i];
-      filtered[i] = applyFilter ? 0.25 * this._prev2 + 0.5 * this._prev1 + 0.25 * curr : curr;
+      filtered[i] = applyFilter
+        ? 0.06 * this._prev4 + 0.24 * this._prev3 + 0.4 * this._prev2 + 0.24 * this._prev1 + 0.06 * curr
+        : curr;
+      this._prev4 = this._prev3;
+      this._prev3 = this._prev2;
       this._prev2 = this._prev1;
       this._prev1 = curr;
     }
@@ -146,6 +187,9 @@ async function openAudioPipeline({
   const AudioContextCtor = globalThis.AudioContext || globalThis.webkitAudioContext;
   const stream = await navigator.mediaDevices.getUserMedia(constraints);
   const audioCtx = new AudioContextCtor();
+  if (audioCtx.state === 'suspended' && typeof audioCtx.resume === 'function') {
+    await audioCtx.resume();
+  }
   const source = audioCtx.createMediaStreamSource(stream);
   const inputRate = audioCtx.sampleRate || TARGET_SAMPLE_RATE;
   logger.info('AudioContext opened', {
@@ -159,11 +203,14 @@ async function openAudioPipeline({
   let muteGain = null;
   let workletUrl = null;
   let lastChunkLogMs = 0;
+  const processAgc = createAgcProcessor();
 
   const emitChunk = (rawSamples) => {
-    const samples = clampBufferInPlace(
-      rawSamples instanceof Float32Array ? rawSamples : new Float32Array(rawSamples)
-    );
+    const samples =
+      rawSamples instanceof Float32Array ? rawSamples : new Float32Array(rawSamples);
+    // Measure raw peak before AGC so dead/muted mic detection (<0.001) remains accurate
+    onPeakSample?.(computePeak(samples));
+    processAgc(samples);
     const rms = computeRms(samples);
     const chunkLength = samples.length;
     const now = performance.now();
@@ -175,7 +222,6 @@ async function openAudioPipeline({
         rms: Number(rms.toFixed(5)),
       });
     }
-    onPeakSample?.(computePeak(samples));
     onRms?.(rms);
     onChunk?.(samples);
   };
