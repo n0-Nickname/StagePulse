@@ -13,6 +13,7 @@ from app.auth.router import router as auth_router
 from app.core.config import settings
 from app.core.database import Base, engine
 from app.core.logging import setup_logging
+from app.filler_dictionary.router import router as filler_dictionary_router
 from app.presentations.router import router as presentations_router
 from app.slots.router import router as slots_router
 
@@ -82,6 +83,7 @@ app.add_exception_handler(IntegrityError, integrity_error_handler)
 app.include_router(auth_router)
 app.include_router(slots_router)
 app.include_router(presentations_router)
+app.include_router(filler_dictionary_router)
 
 
 @app.get("/api/health", tags=["health"])
