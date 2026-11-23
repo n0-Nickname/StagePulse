@@ -8,7 +8,7 @@ import {
   unlockAudio,
   playReelTick,
   playReelLock,
-  playJackpotWin,
+  playMilestoneWin,
 } from '../utils/slotSounds.js';
 
 const SYMBOL_KEYS = ['MIC', 'TIMER', 'DIAMOND', 'FIRE', 'CLOWN'];
@@ -209,7 +209,7 @@ export default function SlotMachineModal({ isOpen, onClose }) {
   if (!isOpen) return null;
 
   const isSpinning = spinPhase === 'spinning';
-  const isJackpot = spinPhase === 'won';
+  const isMilestoneUnlocked = spinPhase === 'won';
 
   const spinsRemaining =
     user?.spins_remaining !== undefined
@@ -272,14 +272,14 @@ export default function SlotMachineModal({ isOpen, onClose }) {
 
       const finalTimer = setTimeout(async () => {
         stopTickLoop();
-        const won = Boolean(result.is_jackpot);
+        const won = Boolean(result.is_pro);
         setSpinPhase(won ? 'won' : 'lost');
         setBannerMessage(
-          won ? t('slots.jackpotTitle') : t('slots.tryAgain')
+          won ? t('slots.milestoneTitle') : t('slots.tryAgain')
         );
 
         if (won) {
-          playJackpotWin(mutedRef.current);
+          playMilestoneWin(mutedRef.current);
           launchConfetti();
         }
 
@@ -306,7 +306,7 @@ export default function SlotMachineModal({ isOpen, onClose }) {
       aria-modal="true"
       aria-labelledby="slot-modal-title"
     >
-      {/* Full-screen Confetti & Gold Coin Canvas Portal */}
+      {/* Full-screen Celebration Confetti Canvas Portal */}
       {typeof document !== 'undefined' &&
         createPortal(
           <canvas
@@ -327,16 +327,16 @@ export default function SlotMachineModal({ isOpen, onClose }) {
       <div
         data-testid="slot-modal-card"
         className={`modal-spring-in relative w-full max-w-md overflow-hidden rounded-2xl obsidian-glass p-6 shadow-2xl transition-all ${
-          isJackpot
-            ? 'jackpot-frame-glow jackpot-shake border-[#F59E0B]/80'
+          isMilestoneUnlocked
+            ? 'milestone-frame-glow milestone-shake border-[#F59E0B]/80'
             : ''
         }`}
       >
-        {/* Rotating Golden Sunburst behind housing on Jackpot */}
-        {isJackpot && (
+        {/* Rotating Golden Sunburst behind housing on Milestone Unlock */}
+        {isMilestoneUnlocked && (
           <div
             aria-hidden="true"
-            className="jackpot-sunburst pointer-events-none absolute left-1/2 top-1/2 h-[520px] w-[520px] opacity-60"
+            className="milestone-sunburst pointer-events-none absolute left-1/2 top-1/2 h-[520px] w-[520px] opacity-60"
           />
         )}
 
@@ -367,7 +367,7 @@ export default function SlotMachineModal({ isOpen, onClose }) {
 
         <div className="relative z-10 text-center">
           <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-[#FF6363]/15 border border-[#FF6363]/35 text-[#FF6363]">
-            {isJackpot ? (
+            {isMilestoneUnlocked ? (
               <Crown className="h-6 w-6 text-[#F59E0B]" />
             ) : (
               <Sparkles className="h-6 w-6" />
@@ -377,14 +377,14 @@ export default function SlotMachineModal({ isOpen, onClose }) {
             id="slot-modal-title"
             className="text-2xl font-bold tracking-tight text-[#F4F5F7]"
           >
-            {isJackpot ? t('slots.jackpotTitle') : t('slots.title')}
+            {isMilestoneUnlocked ? t('slots.milestoneTitle') : t('slots.title')}
           </h2>
           <p className="mt-1 text-sm text-[#9CA3AF]">
-            {isJackpot ? t('slots.jackpotDesc') : t('slots.subtitle')}
+            {isMilestoneUnlocked ? t('slots.milestoneDesc') : t('slots.subtitle')}
           </p>
         </div>
 
-        {/* 3-Reel Mechanical Slot Window */}
+        {/* 3-Reel Pace Milestone Window */}
         <div className="relative z-10 mt-6 grid grid-cols-3 gap-3 rounded-2xl obsidian-inset p-4 shadow-inner">
           {strips.map((strip, idx) => {
             const spinning = spinningReels[idx];
@@ -393,12 +393,12 @@ export default function SlotMachineModal({ isOpen, onClose }) {
               <div
                 key={idx}
                 className={`relative h-24 overflow-hidden rounded-xl border bg-[#121317] ${
-                  isJackpot
+                  isMilestoneUnlocked
                     ? 'border-[#F59E0B]/70 bg-[#F59E0B]/10'
                     : 'border-white/[0.08]'
                 }`}
               >
-                {isJackpot && (
+                {isMilestoneUnlocked && (
                   <div
                     aria-hidden="true"
                     className="winning-shine-sweep pointer-events-none absolute inset-0 z-10"
@@ -406,7 +406,7 @@ export default function SlotMachineModal({ isOpen, onClose }) {
                 )}
                 <div
                   className={
-                    isJackpot
+                    isMilestoneUnlocked
                       ? 'winning-symbol-pop'
                       : landed && idx === 2
                       ? 'slot-reel-landed'
@@ -460,7 +460,7 @@ export default function SlotMachineModal({ isOpen, onClose }) {
           <div
             data-testid="slot-banner-message"
             className={`relative z-10 mt-4 rounded-xl border px-3.5 py-2.5 text-center text-xs font-semibold ${
-              isJackpot
+              isMilestoneUnlocked
                 ? 'badge-slam-in border-[#F59E0B]/60 bg-[#10B981]/20 text-[#FDE68A]'
                 : 'border-white/[0.08] bg-[#0B0C10] text-[#9CA3AF]'
             }`}

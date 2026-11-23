@@ -67,7 +67,7 @@ export function playReelLock(reelIndex = 0, muted = false) {
   osc.stop(now + 0.13);
 }
 
-export function playJackpotWin(muted = false) {
+export function playMilestoneWin(muted = false) {
   if (muted) return;
   const ctx = getAudioContext();
   if (!ctx) return;
@@ -94,7 +94,7 @@ export function playJackpotWin(muted = false) {
     osc.stop(start + 0.88);
   });
 
-  // Coin-shower shimmer chimes (2000Hz - 4500Hz) over ~2.4s
+  // Celebration shimmer chimes (2000Hz - 4500Hz) over ~2.4s
   for (let i = 0; i < 22; i++) {
     const start = now + 0.25 + i * 0.095 + Math.random() * 0.03;
     const freq = 2000 + Math.random() * 2500;

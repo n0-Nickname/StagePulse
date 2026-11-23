@@ -174,7 +174,7 @@
   animation-delay: calc(var(--stagger-index, 0) * 55ms);
 }
 
-/* Custom Staggered Gacha Slot Machine Animations */
+/* Speech Performance Milestone Animations */
 @keyframes slotReelSpin {
   0% {
     transform: translateY(-65%);
@@ -208,7 +208,7 @@
   }
 }
 
-@keyframes jackpotPulse {
+@keyframes milestonePulse {
   0%, 100% {
     box-shadow: 0 0 28px rgba(245, 158, 11, 0.35), inset 0 0 18px rgba(245, 158, 11, 0.16);
     border-color: rgba(245, 158, 11, 0.85);
@@ -236,8 +236,8 @@
   animation: slotReelBounce 0.32s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
-.jackpot-frame-glow {
-  animation: jackpotPulse 1.6s ease-in-out infinite;
+.milestone-frame-glow {
+  animation: milestonePulse 1.6s ease-in-out infinite;
 }
 
 .pro-badge-shimmer {
@@ -246,7 +246,7 @@
   animation: shimmerSweep 3.5s linear infinite;
 }
 
-@keyframes jackpotShake {
+@keyframes milestoneShake {
   0%, 100% { transform: translate3d(0, 0, 0); }
   15% { transform: translate3d(-5px, 3px, 0) rotate(-0.6deg); }
   30% { transform: translate3d(5px, -3px, 0) rotate(0.6deg); }
@@ -272,11 +272,11 @@
   100% { opacity: 1; transform: scale(1) translateY(0); }
 }
 
-.jackpot-shake {
-  animation: jackpotShake 0.45s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+.milestone-shake {
+  animation: milestoneShake 0.45s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
 }
 
-.jackpot-sunburst {
+.milestone-sunburst {
   background: repeating-conic-gradient(
     from 0deg,
     rgba(245, 158, 11, 0.18) 0deg 12deg,
@@ -312,10 +312,10 @@
   .stagger-item,
   .slot-reel-spinning,
   .slot-reel-landed,
-  .jackpot-frame-glow,
+  .milestone-frame-glow,
   .pro-badge-shimmer,
-  .jackpot-shake,
-  .jackpot-sunburst,
+  .milestone-shake,
+  .milestone-sunburst,
   .winning-symbol-pop,
   .winning-shine-sweep,
   .badge-slam-in {
