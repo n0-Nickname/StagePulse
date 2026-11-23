@@ -216,4 +216,33 @@ describe('SlotMachineModal', () => {
     fireEvent.click(doneBtn);
     expect(onClose).toHaveBeenCalled();
   });
+
+  it('uses fluid reel sizing, tighter mobile padding/gaps, and >=44px touch targets for 360px viewports', () => {
+    render(
+      <LanguageProvider>
+        <SlotMachineModal isOpen={true} onClose={() => {}} />
+      </LanguageProvider>
+    );
+
+    const card = screen.getByTestId('slot-modal-card');
+    expect(card.className).toContain('p-3');
+    expect(card.className).toContain('sm:p-6');
+
+    const reelsContainer = screen.getByTestId('slot-reels-container');
+    expect(reelsContainer.className).toContain('grid-cols-3');
+    expect(reelsContainer.className).toContain('gap-2');
+    expect(reelsContainer.className).toContain('sm:gap-4');
+    expect(reelsContainer.className).toContain('p-3');
+    expect(reelsContainer.className).toContain('sm:p-6');
+
+    const firstEmoji = screen.getByRole('img', { name: 'Diamond' });
+    expect(firstEmoji.className).toContain('text-3xl');
+    expect(firstEmoji.className).toContain('sm:text-5xl');
+
+    expect(screen.getByRole('button', { name: /Mute sound/i }).className).toContain('min-h-[44px]');
+    expect(screen.getByRole('button', { name: /Close/i }).className).toContain('min-h-[44px]');
+    expect(screen.getByRole('button', { name: /Check Milestone/i }).className).toContain(
+      'min-h-[44px]'
+    );
+  });
 });

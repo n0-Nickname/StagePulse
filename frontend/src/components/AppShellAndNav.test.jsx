@@ -115,6 +115,11 @@ describe('App routing, ProtectedRoute, Navbar, and LiveMetricsBar', () => {
     );
 
     const unlockBtn = await screen.findByRole('button', { name: /Unlock PRO/i });
+    expect(unlockBtn.className).toContain('min-h-[44px]');
+    expect(screen.getByRole('button', { name: /Sign out/i }).className).toContain('min-h-[44px]');
+    expect(screen.getByTestId('app-shell').className).toContain('overflow-x-hidden');
+    const studioLinks = screen.getAllByRole('link', { name: /Studio/i });
+    expect(studioLinks.some((el) => el.className.includes('min-h-[44px]'))).toBe(true);
     fireEvent.click(unlockBtn);
     await screen.findByRole('heading', { name: /Unlock PRO analytics/i });
   });

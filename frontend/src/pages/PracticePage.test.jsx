@@ -67,6 +67,20 @@ describe('PracticePage', () => {
     const startBtn = screen.getByRole('button', { name: /Start rehearsal/i });
     expect(startBtn.className).toContain('min-h-[48px]');
 
+    // Mobile responsive touch targets & stacked full-width slider
+    const slider = screen.getByLabelText(/Mic sensitivity/i);
+    expect(slider.className).toContain('w-full');
+    expect(slider.className).toContain('min-h-[44px]');
+    expect(slider.className).toContain('touch-none');
+    expect(slider.className).not.toContain('sm:w-32');
+    expect(screen.getByTestId('noise-gate-value')).toHaveTextContent('0.018');
+    expect(screen.getByTestId('noise-gate-header').className).toContain('justify-between');
+    expect(screen.getByRole('button', { name: '1m' }).className).toContain('min-h-[44px]');
+    expect(screen.getByRole('button', { name: /^Set$/i }).className).toContain('min-h-[44px]');
+    expect(screen.getByRole('button', { name: /Simulated mic: Off/i }).className).toContain(
+      'min-h-[44px]'
+    );
+
     // Presets 1m, 3m, 5m, 10m & Custom
     fireEvent.click(screen.getByRole('button', { name: '5m' }));
     expect(screen.getByTestId('timer-display').textContent).toBe('5:00');
@@ -81,6 +95,7 @@ describe('PracticePage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Simulate silence/i }));
     fireEvent.change(screen.getByLabelText(/Speech language/i), { target: { value: 'uk-UA' } });
     fireEvent.change(screen.getByLabelText(/Mic sensitivity/i), { target: { value: '0.060' } });
+    expect(screen.getByTestId('noise-gate-value')).toHaveTextContent('0.060');
 
     // Start, Pause, Resume, Finish & Save
     fireEvent.click(screen.getByRole('button', { name: /Start rehearsal/i }));
