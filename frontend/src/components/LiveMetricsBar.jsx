@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { useTranslation } from '../context/LanguageContext.jsx';
 
-export default function LiveMetricsBar({
+function LiveMetricsBar({
   wpm = 0,
+  rollingWpm = 0,
   pacingZone = 'warming_up',
   wordCount = 0,
   pauseCount = 0,
@@ -57,6 +58,14 @@ export default function LiveMetricsBar({
             {wpm}
           </span>
           <span className="text-xs font-mono text-[#9CA3AF]">{t('common.wpm')}</span>
+          {rollingWpm > 0 && (
+            <span
+              data-testid="rolling-wpm-value"
+              className="ml-auto text-[11px] font-mono text-[#C4B5FD] tabular-nums"
+            >
+              15s: {rollingWpm}
+            </span>
+          )}
         </div>
       </div>
 
@@ -123,3 +132,5 @@ export default function LiveMetricsBar({
     </div>
   );
 }
+
+export default memo(LiveMetricsBar);

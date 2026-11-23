@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { memo, useState } from 'react';
 import { Play, Pause, RotateCcw, CheckCircle2 } from 'lucide-react';
 import { useTranslation } from '../context/LanguageContext.jsx';
 
@@ -12,7 +12,7 @@ function formatTime(sec) {
   return `${isNegative ? '-' : ''}${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-export default function TimerControls({
+function TimerControls({
   targetDurationSec,
   elapsedSec,
   remainingSec,
@@ -181,3 +181,5 @@ export default function TimerControls({
     </div>
   );
 }
+
+export default memo(TimerControls);

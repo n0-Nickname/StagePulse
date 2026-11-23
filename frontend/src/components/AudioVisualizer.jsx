@@ -1,9 +1,11 @@
-import React from 'react';
+import React, { memo, useEffect, useRef } from 'react';
 import { useTranslation } from '../context/LanguageContext.jsx';
 
-export default function AudioVisualizer({
+function AudioVisualizer({
   frequencyBars = [],
   rmsLevel = 0,
+  rmsRef = null,
+  barsRef = null,
   isSilentPause = false,
   isRunning = false,
   noiseThreshold = 0.045,
@@ -12,6 +14,48 @@ export default function AudioVisualizer({
   onChangeSpeechLang,
 }) {
   const { t } = useTranslation();
+  const barElsRef = useRef([]);
+  const rmsTextRef = useRef(null);
+
+  useEffect(() => {
+    if (!barsRef && !rmsRef) {
+      if (rmsTextRef.current) {
+        rmsTextRef.current.textContent = `RMS ${Number(rmsLevel || 0).toFixed(3)}`;
+      }
+      return undefined;
+    }
+
+    if (!isRunning) {
+      for (const el of barElsRef.current) {
+        if (el) el.style.transform = 'scaleY(0.08)';
+      }
+      if (rmsTextRef.current) {
+        rmsTextRef.current.textContent = 'RMS 0.000';
+      }
+      return undefined;
+    }
+
+    let rafId = 0;
+    const renderFrame = () => {
+      const bars = barsRef?.current;
+      if (bars) {
+        for (let i = 0; i < bars.length; i += 1) {
+          const el = barElsRef.current[i];
+          if (el) {
+            const scale = Math.max(0.08, Math.min(1, Number(bars[i] ?? 0.05)));
+            el.style.transform = `scaleY(${scale})`;
+          }
+        }
+      }
+      if (rmsRef && rmsTextRef.current) {
+        rmsTextRef.current.textContent = `RMS ${Number(rmsRef.current || 0).toFixed(3)}`;
+      }
+      rafId = requestAnimationFrame(renderFrame);
+    };
+
+    rafId = requestAnimationFrame(renderFrame);
+    return () => cancelAnimationFrame(rafId);
+  }, [isRunning, barsRef, rmsRef, rmsLevel]);
 
   return (
     <div className="obsidian-glass rounded-2xl p-5 space-y-4">
@@ -33,7 +77,11 @@ export default function AudioVisualizer({
               ? t('audio.silenceDetected')
               : t('audio.voiceActive')}
           </span>
-          <span className="text-xs font-mono text-[#9CA3AF] tabular-nums">
+          <span
+            ref={rmsTextRef}
+            data-testid="audio-rms-value"
+            className="text-xs font-mono text-[#9CA3AF] tabular-nums"
+          >
             RMS {rmsLevel.toFixed(3)}
           </span>
         </div>
@@ -82,7 +130,7 @@ export default function AudioVisualizer({
 
       <div className="h-24 flex items-end justify-between gap-1.5 px-3 py-2.5 rounded-xl obsidian-inset">
         {frequencyBars.map((val, idx) => {
-          const heightPct = Math.max(8, Math.min(100, Math.round(val * 100)));
+          const scale = Math.max(0.08, Math.min(1, Number(val ?? 0.05)));
           const barColor = !isRunning
             ? 'bg-white/[0.12]'
             : isSilentPause
@@ -91,8 +139,12 @@ export default function AudioVisualizer({
           return (
             <div
               key={idx}
-              className={`flex-1 rounded-full transition-all duration-75 ${barColor}`}
-              style={{ height: `${heightPct}%` }}
+              ref={(el) => {
+                barElsRef.current[idx] = el;
+              }}
+              data-testid="audio-meter-bar"
+              className={`flex-1 h-full origin-bottom rounded-full will-change-transform ${barColor}`}
+              style={{ transform: `scaleY(${scale})` }}
             />
           );
         })}
@@ -100,3 +152,5 @@ export default function AudioVisualizer({
     </div>
   );
 }
+
+export default memo(AudioVisualizer);

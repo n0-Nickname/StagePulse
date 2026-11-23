@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Cpu, AlertCircle } from 'lucide-react';
 import { useTimer } from '../hooks/useTimer.js';
@@ -9,6 +9,7 @@ import { calculatePresentationScore, generateProfessorVerdict } from '../utils/r
 import TimerControls from '../components/TimerControls.jsx';
 import AudioVisualizer from '../components/AudioVisualizer.jsx';
 import LiveMetricsBar from '../components/LiveMetricsBar.jsx';
+import LiveTranscriptPanel from '../components/LiveTranscriptPanel.jsx';
 import SessionSummaryModal from '../components/SessionSummaryModal.jsx';
 
 export default function PracticePage() {
@@ -28,7 +29,7 @@ export default function PracticePage() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
 
-  const handleFinishSession = () => {
+  const handleFinishSession = useCallback(() => {
     if (timer.isRunning) {
       timer.pause();
     }
@@ -70,41 +71,61 @@ export default function PracticePage() {
     });
     setSaveError(null);
     setSummaryOpen(true);
-  };
+  }, [
+    analytics.estimationMethod,
+    analytics.fillerBreakdown,
+    analytics.fillerCount,
+    analytics.pacingTimeline,
+    analytics.pauseCount,
+    analytics.totalPauseSec,
+    analytics.transcript,
+    analytics.wordCount,
+    analytics.wpm,
+    lang,
+    t,
+    timer,
+  ]);
 
-  const handleResetAll = () => {
+  const handleResetAll = useCallback(() => {
     timer.reset();
     analytics.resetAnalytics();
-  };
+  }, [analytics.resetAnalytics, timer.reset]);
 
-  const handleSaveSession = async ({ title }) => {
-    setIsSaving(true);
-    setSaveError(null);
-    try {
-      await presentationsApi.create({
-        title,
-        target_duration_sec: summaryData.targetDurationSec,
-        actual_duration_sec: summaryData.actualDurationSec,
-        word_count: summaryData.wordCount,
-        wpm: summaryData.wpm,
-        pause_count: summaryData.pauseCount,
-        total_pause_sec: Number(summaryData.totalPauseSec.toFixed(1)),
-        estimation_method: summaryData.estimationMethod,
-        score: summaryData.score,
-        filler_count: summaryData.fillerCount,
-        top_fillers_json: JSON.stringify(summaryData.fillerBreakdown),
-        pacing_timeline_json: JSON.stringify(summaryData.pacingTimeline),
-        verdict: summaryData.verdict,
-      });
-      setSummaryOpen(false);
-      handleResetAll();
-      navigate('/dashboard');
-    } catch (err) {
-      setSaveError(formatApiError(err, t));
-    } finally {
-      setIsSaving(false);
-    }
-  };
+  const handleCloseSummary = useCallback(() => {
+    setSummaryOpen(false);
+  }, []);
+
+  const handleSaveSession = useCallback(
+    async ({ title }) => {
+      setIsSaving(true);
+      setSaveError(null);
+      try {
+        await presentationsApi.create({
+          title,
+          target_duration_sec: summaryData.targetDurationSec,
+          actual_duration_sec: summaryData.actualDurationSec,
+          word_count: summaryData.wordCount,
+          wpm: summaryData.wpm,
+          pause_count: summaryData.pauseCount,
+          total_pause_sec: Number(summaryData.totalPauseSec.toFixed(1)),
+          estimation_method: summaryData.estimationMethod,
+          score: summaryData.score,
+          filler_count: summaryData.fillerCount,
+          top_fillers_json: JSON.stringify(summaryData.fillerBreakdown),
+          pacing_timeline_json: JSON.stringify(summaryData.pacingTimeline),
+          verdict: summaryData.verdict,
+        });
+        setSummaryOpen(false);
+        handleResetAll();
+        navigate('/dashboard');
+      } catch (err) {
+        setSaveError(formatApiError(err, t));
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [handleResetAll, navigate, summaryData, t]
+  );
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-8 space-y-6 text-[#F4F5F7]">
@@ -211,7 +232,8 @@ export default function PracticePage() {
 
       <AudioVisualizer
         frequencyBars={analytics.frequencyBars}
-        rmsLevel={analytics.rmsLevel}
+        rmsRef={analytics.liveRmsRef}
+        barsRef={analytics.liveBarsRef}
         isSilentPause={analytics.isSilentPause}
         isRunning={timer.isRunning}
         noiseThreshold={analytics.noiseThreshold}
@@ -222,6 +244,7 @@ export default function PracticePage() {
 
       <LiveMetricsBar
         wpm={analytics.wpm}
+        rollingWpm={analytics.rollingWpm}
         pacingZone={analytics.pacingZone}
         wordCount={analytics.wordCount}
         pauseCount={analytics.pauseCount}
@@ -232,20 +255,14 @@ export default function PracticePage() {
         estimationMethod={analytics.estimationMethod}
       />
 
-      {analytics.liveTranscript && (
-        <div className="obsidian-glass rounded-2xl p-4">
-          <div className="text-xs font-medium text-[#9CA3AF] mb-1.5">
-            {t('practice.liveTranscript')}
-          </div>
-          <p className="text-sm text-[#F4F5F7] leading-relaxed">
-            {analytics.liveTranscript}
-          </p>
-        </div>
-      )}
+      <LiveTranscriptPanel
+        title={t('practice.liveTranscript')}
+        transcript={analytics.liveTranscript}
+      />
 
       <SessionSummaryModal
         isOpen={summaryOpen}
-        onClose={() => setSummaryOpen(false)}
+        onClose={handleCloseSummary}
         onSave={handleSaveSession}
         summary={summaryData}
         isSaving={isSaving}
