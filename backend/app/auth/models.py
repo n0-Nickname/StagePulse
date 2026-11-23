@@ -1,7 +1,8 @@
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Integer, String
+from sqlalchemy import JSON, Boolean, DateTime, Integer, String
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -11,7 +12,7 @@ if TYPE_CHECKING:
 
 
 class User(Base):
-    """Email-only authenticated user account with PRO tier & slot spin tracking."""
+    """Email-only authenticated user account with PRO tier & milestone progress."""
 
     __tablename__ = "users"
 
@@ -20,6 +21,12 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     is_pro: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     spin_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    custom_filler_words: Mapped[list[str]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"),
+        default=list,
+        server_default="[]",
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
@@ -34,5 +41,5 @@ class User(Base):
 
     @property
     def spins_remaining(self) -> int:
-        """Return remaining spins before guaranteed PRO jackpot (0 when already PRO)."""
+        """Return remaining milestone steps in the current Pace Mastery cycle (0 when PRO)."""
         return 0 if self.is_pro else max(0, 3 - self.spin_count)

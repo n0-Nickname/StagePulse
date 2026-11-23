@@ -21,6 +21,7 @@ class UserResponse(BaseModel):
     is_pro: bool
     spin_count: int
     spins_remaining: int
+    custom_filler_words: list[str] = Field(default_factory=list)
     created_at: datetime
 
 
