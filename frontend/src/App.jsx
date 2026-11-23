@@ -36,7 +36,10 @@ function AppShell() {
   const { user, loading, isSlotModalOpen, closeSlotModal } = useAuth();
 
   return (
-    <div className="min-h-screen bg-[#07080A] text-[#F4F5F7] flex flex-col">
+    <div
+      data-testid="app-shell"
+      className="min-h-screen overflow-x-hidden bg-[#07080A] text-[#F4F5F7] flex flex-col"
+    >
       <Navbar />
       <main className="flex-1">
         <Suspense fallback={<PageSpinner />}>
