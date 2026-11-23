@@ -1,22 +1,30 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo, startTransition } from 'react';
 import { startMicCapture } from '../audio/micCapture.js';
 import { createDefaultAsrEngine } from '../services/asrAdapter.js';
 import { createLogger } from '../utils/logger.js';
+import {
+  createSpeechStore,
+  useSpeechSnapshot,
+  buildCommittedBlocks,
+  computePartialText,
+  detectWasmMode,
+} from '../stores/speechStore.js';
 
 const logger = createLogger('ASR:Analytics');
 
 const DEFAULT_SILENCE_THRESHOLD = 0.018;
 const PAUSE_DURATION_THRESHOLD_MS = 1500;
+export const MAX_INTER_WORD_PAUSE_MS = 15000;
 const LIVE_PAUSE_POLL_MS = 200;
 const SPEECH_BURST_DIP_FACTOR = 1.22;
 const SPEECH_BURST_PEAK_FACTOR = 1.95;
 const SYLLABLE_COOLDOWN_MS = 140;
 const BAR_COUNT = 24;
-const TRANSCRIPT_THROTTLE_MS = 135;
-const RMS_STATE_THROTTLE_MS = 1000;
+const TRANSCRIPT_THROTTLE_MS = 120;
 const ROLLING_WPM_WINDOW_SEC = 15;
 const CACHE_NAME = 'tinyasr-models-v1';
 const MODEL_CACHE_KEYS = ['/models/en-ru-uk.tzf.gz', '/models/silero_vad.onnx.gz'];
+const INITIAL_BARS = Object.freeze(new Array(BAR_COUNT).fill(0.05));
 
 export const BILINGUAL_FILLER_WORDS = {
   uk: ['ну', 'типу', 'короче', 'блін', 'як би', 'власне', 'значить', 'от'],
@@ -61,6 +69,31 @@ export function computeCommittedWordPauses(
   }
 
   return { pauseCount, totalPauseMs, gaps };
+}
+
+export function computeActiveSpeakingSec(
+  speakingElapsedSec,
+  words = [],
+  maxPauseMs = MAX_INTER_WORD_PAUSE_MS,
+  extraLiveSilenceMs = 0
+) {
+  let outlierExcessMs = 0;
+  if (Array.isArray(words) && words.length > 1) {
+    const normalized = normalizeWordTimestamps(words);
+    for (let i = 1; i < normalized.length; i += 1) {
+      const prev = normalized[i - 1];
+      const curr = normalized[i];
+      if (prev.endMs <= 0) continue;
+      const gapMs = curr.startMs - prev.endMs;
+      if (gapMs > maxPauseMs) {
+        outlierExcessMs += gapMs - maxPauseMs;
+      }
+    }
+  }
+  if (extraLiveSilenceMs > maxPauseMs) {
+    outlierExcessMs += extraLiveSilenceMs - maxPauseMs;
+  }
+  return Math.max(0, speakingElapsedSec - outlierExcessMs / 1000);
 }
 
 export function computeWordTimestampPauses(
@@ -185,6 +218,13 @@ export function analyzeFillers(text, speechLang = 'uk-UA') {
   return { fillerCount: total, fillerBreakdown: counts };
 }
 
+function derivePacingZone(wpm) {
+  if (wpm === 0) return 'warming_up';
+  if (wpm < 110) return 'too_slow';
+  if (wpm <= 160) return 'optimal';
+  return 'too_fast';
+}
+
 function buildBarsFromRms(rms) {
   const norm = Math.min(1, rms / 0.15);
   return new Array(BAR_COUNT).fill(0).map((_, idx) => {
@@ -199,41 +239,33 @@ export function useSpeechAnalytics(
   speechLang = 'uk-UA',
   options = {}
 ) {
-  const { engineFactory, micCaptureFactory = startMicCapture } = options;
+  const { engineFactory, micCaptureFactory = startMicCapture, store: externalStore, reactive = true } =
+    options;
 
-  const [rmsLevel, setRmsLevel] = useState(0);
-  const [frequencyBars, setFrequencyBars] = useState(() => new Array(BAR_COUNT).fill(0.05));
-  const [wordCount, setWordCount] = useState(0);
-  const [words, setWords] = useState([]);
-  const [livePauseMs, setLivePauseMs] = useState(0);
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  const [estimationMethod, setEstimationMethod] = useState('speech_api');
+  const store = useMemo(() => externalStore ?? createSpeechStore(), [externalStore]);
+  const noopStore = useMemo(() => createSpeechStore(), []);
+  const snapshot = useSpeechSnapshot(reactive ? store : noopStore);
+
   const [silenceThreshold, setSilenceThreshold] = useState(DEFAULT_SILENCE_THRESHOLD);
   const [isSimulatedMic, setIsSimulatedMic] = useState(false);
   const [isSimulatingSilence, setIsSimulatingSilence] = useState(false);
-  const [micError, setMicError] = useState(null);
-  const [engineError, setEngineError] = useState(null);
-  const [liveTranscript, setLiveTranscript] = useState('');
-  const [pacingTimeline, setPacingTimeline] = useState([]);
-  const [modelProgress, setModelProgress] = useState({
-    percent: 100,
-    cached: true,
-    ready: true,
-  });
 
   const lastTimelineBucketRef = useRef(-1);
 
   // Zero-rerender audio meter refs driven via rAF in AudioVisualizer
   const liveRmsRef = useRef(0);
-  const liveBarsRef = useRef(new Array(BAR_COUNT).fill(0.05));
-  const rmsStateRef = useRef(0);
-  const lastRmsStateFlushMsRef = useRef(null);
+  const liveBarsRef = useRef([...INITIAL_BARS]);
 
   // Active speaking WPM & rolling 15s WPM refs
   const activeElapsedSecRef = useRef(activeElapsedSec);
   const startElapsedRef = useRef(null);
   const firstSpeechSecRef = useRef(null);
   const wordSamplesRef = useRef([]);
+  const wordsRef = useRef([]);
+  const wordCountRef = useRef(0);
+  const liveTranscriptRef = useRef('');
+  const livePauseMsRef = useRef(0);
+  const committedPausesRef = useRef({ pauseCount: 0, totalPauseMs: 0, gaps: [] });
 
   // Transcript throttle, live active pause timer & warmup refs
   const transcriptTimerRef = useRef(null);
@@ -256,7 +288,7 @@ export function useSpeechAnalytics(
   const silenceThresholdRef = useRef(silenceThreshold);
   const isSimulatedMicRef = useRef(isSimulatedMic);
   const isSimulatingSilenceRef = useRef(isSimulatingSilence);
-  const estimationMethodRef = useRef(estimationMethod);
+  const estimationMethodRef = useRef('speech_api');
   const speechLangRef = useRef(speechLang);
   const engineFactoryRef = useRef(engineFactory);
   const micCaptureFactoryRef = useRef(micCaptureFactory);
@@ -276,13 +308,93 @@ export function useSpeechAnalytics(
   const burstArmedRef = useRef(true);
   const lastSyllableMsRef = useRef(0);
 
+  const syncDerivedMetricsToStore = useCallback(
+    (nextElapsedSec = activeElapsedSecRef.current) => {
+      const currentWords = wordsRef.current;
+      const currentWordCount = wordCountRef.current;
+      const currentLivePauseMs = livePauseMsRef.current;
+      const committed = committedPausesRef.current;
+      const hasLiveActivePause =
+        isRunningRef.current && currentLivePauseMs >= PAUSE_DURATION_THRESHOLD_MS;
+
+      const effectivePauseCount = committed.pauseCount + (hasLiveActivePause ? 1 : 0);
+      const effectiveTotalPauseSec = Number(
+        ((committed.totalPauseMs + (hasLiveActivePause ? currentLivePauseMs : 0)) / 1000).toFixed(1)
+      );
+      const effectiveCurrentSilenceSec = hasLiveActivePause
+        ? Number((currentLivePauseMs / 1000).toFixed(1))
+        : 0;
+
+      if (isRunningRef.current) {
+        if (startElapsedRef.current === null) {
+          startElapsedRef.current = nextElapsedSec;
+        }
+        if (currentWordCount > 0) {
+          const samples = wordSamplesRef.current;
+          const last = samples[samples.length - 1];
+          if (last && last.t === nextElapsedSec) {
+            last.words = currentWordCount;
+          } else {
+            samples.push({ t: nextElapsedSec, words: currentWordCount });
+          }
+        }
+      }
+
+      const speakingElapsedSec = Math.max(0, nextElapsedSec - (firstSpeechSecRef.current ?? 0));
+      const activeSpeakingSec = computeActiveSpeakingSec(
+        speakingElapsedSec,
+        currentWords,
+        MAX_INTER_WORD_PAUSE_MS,
+        hasLiveActivePause ? currentLivePauseMs : 0
+      );
+
+      const wpm = computeOverallWpm(currentWordCount, activeSpeakingSec);
+      const rollingWpm = computeRollingWpm(
+        wordSamplesRef.current,
+        nextElapsedSec,
+        firstSpeechSecRef.current ?? 0
+      );
+      const pacingZone = derivePacingZone(wpm);
+
+      const patch = {
+        wordCount: currentWordCount,
+        wpm,
+        rollingWpm,
+        pacingZone,
+        longPausesCount: effectivePauseCount,
+        activePauseMs: currentLivePauseMs,
+        isPausedLive: hasLiveActivePause,
+        totalPauseSec: effectiveTotalPauseSec,
+        currentSilenceSec: effectiveCurrentSilenceSec,
+      };
+
+      if (isRunningRef.current && nextElapsedSec > 0) {
+        const bucket = Math.floor(nextElapsedSec / 10);
+        if (
+          bucket > lastTimelineBucketRef.current &&
+          nextElapsedSec >= 10 &&
+          nextElapsedSec % 10 === 0
+        ) {
+          lastTimelineBucketRef.current = bucket;
+          const prevTimeline = store.getState().pacingTimeline;
+          patch.pacingTimeline = [...prevTimeline, { sec: nextElapsedSec, wpm }];
+        }
+      }
+
+      store.patch(patch);
+    },
+    [store]
+  );
+
   useEffect(() => {
     activeElapsedSecRef.current = activeElapsedSec;
-  }, [activeElapsedSec]);
+    syncDerivedMetricsToStore(activeElapsedSec);
+  }, [activeElapsedSec, syncDerivedMetricsToStore]);
 
   useEffect(() => {
     isRunningRef.current = isRunning;
-  }, [isRunning]);
+    store.patch({ isRecording: isRunning });
+  }, [isRunning, store]);
 
   useEffect(() => {
     silenceThresholdRef.current = silenceThreshold;
@@ -297,12 +409,18 @@ export function useSpeechAnalytics(
   }, [isSimulatingSilence]);
 
   useEffect(() => {
-    estimationMethodRef.current = estimationMethod;
-  }, [estimationMethod]);
-
-  useEffect(() => {
     speechLangRef.current = speechLang;
-  }, [speechLang]);
+    const { fillerCount, fillerBreakdown } = analyzeFillers(
+      liveTranscriptRef.current,
+      speechLang
+    );
+    store.patch({
+      activeLang: speechLang,
+      wasmMode: detectWasmMode(),
+      fillerCount,
+      fillerBreakdown,
+    });
+  }, [speechLang, store]);
 
   useEffect(() => {
     engineFactoryRef.current = engineFactory;
@@ -311,6 +429,22 @@ export function useSpeechAnalytics(
   useEffect(() => {
     micCaptureFactoryRef.current = micCaptureFactory;
   }, [micCaptureFactory]);
+
+  const setEstimationMethod = useCallback(
+    (method) => {
+      estimationMethodRef.current = method;
+      store.patch({ estimationMethod: method });
+    },
+    [store]
+  );
+
+  const setWordCount = useCallback(
+    (nextCount) => {
+      wordCountRef.current = nextCount;
+      syncDerivedMetricsToStore(activeElapsedSecRef.current);
+    },
+    [syncDerivedMetricsToStore]
+  );
 
   const stopAudioAndSpeech = useCallback(() => {
     if (rafIdRef.current !== null) {
@@ -371,32 +505,22 @@ export function useSpeechAnalytics(
     }
     analyserRef.current = null;
     liveRmsRef.current = 0;
-    liveBarsRef.current = new Array(BAR_COUNT).fill(0.05);
-    rmsStateRef.current = 0;
-    lastRmsStateFlushMsRef.current = null;
+    liveBarsRef.current = [...INITIAL_BARS];
     lastTranscriptFlushMsRef.current = null;
     hasPartialStreamingRef.current = false;
-    setLivePauseMs(0);
-    setIsSpeaking(false);
-    setRmsLevel(0);
-    setFrequencyBars(new Array(BAR_COUNT).fill(0.05));
-  }, []);
+    livePauseMsRef.current = 0;
+    store.patch({
+      activePauseMs: 0,
+      isPausedLive: false,
+      isSpeaking: false,
+      currentSilenceSec: 0,
+    });
+  }, [store]);
 
   const pushAudioRms = useCallback((rms, bars) => {
     const normalizedRms = Math.min(1, rms / 0.15);
     liveRmsRef.current = normalizedRms;
     liveBarsRef.current = bars || buildBarsFromRms(rms);
-
-    const now = performance.now();
-    if (
-      (rmsStateRef.current === 0 && normalizedRms > 0) ||
-      lastRmsStateFlushMsRef.current === null ||
-      now - lastRmsStateFlushMsRef.current >= RMS_STATE_THROTTLE_MS
-    ) {
-      lastRmsStateFlushMsRef.current = now;
-      rmsStateRef.current = normalizedRms;
-      setRmsLevel(normalizedRms);
-    }
   }, []);
 
   const markFirstSpeechDetected = useCallback(() => {
@@ -407,34 +531,47 @@ export function useSpeechAnalytics(
     }
   }, []);
 
-  const trackWordActivity = useCallback((payload) => {
-    const safeWords = Array.isArray(payload?.words) ? payload.words : [];
-    const text = payload?.fullText || '';
-    const liveWordsCount = Math.max(countNormalizedWords(text), safeWords.length);
+  const trackWordActivity = useCallback(
+    (payload) => {
+      const safeWords = Array.isArray(payload?.words) ? payload.words : [];
+      const text = payload?.fullText || '';
+      const liveWordsCount = Math.max(countNormalizedWords(text), safeWords.length);
 
-    if (!text && safeWords.length === 0) {
-      lastWordActivityAtRef.current = null;
-      lastFullTextWordCountRef.current = 0;
-      lastFullTextValueRef.current = '';
-      hasPartialStreamingRef.current = false;
-      setLivePauseMs(0);
-      setIsSpeaking(false);
-      return;
-    }
+      if (!text && safeWords.length === 0) {
+        lastWordActivityAtRef.current = null;
+        lastFullTextWordCountRef.current = 0;
+        lastFullTextValueRef.current = '';
+        hasPartialStreamingRef.current = false;
+        livePauseMsRef.current = 0;
+        store.patch({
+          activePauseMs: 0,
+          isPausedLive: false,
+          isSpeaking: false,
+          currentSilenceSec: 0,
+        });
+        return;
+      }
 
-    hasPartialStreamingRef.current = !payload?.isFinal && Boolean(text);
+      hasPartialStreamingRef.current = !payload?.isFinal && Boolean(text);
 
-    if (
-      liveWordsCount > 0 &&
-      (liveWordsCount !== lastFullTextWordCountRef.current || text !== lastFullTextValueRef.current)
-    ) {
-      lastWordActivityAtRef.current = performance.now();
-      lastFullTextWordCountRef.current = liveWordsCount;
-      lastFullTextValueRef.current = text;
-      setLivePauseMs(0);
-      setIsSpeaking(true);
-    }
-  }, []);
+      if (
+        liveWordsCount > 0 &&
+        (liveWordsCount !== lastFullTextWordCountRef.current || text !== lastFullTextValueRef.current)
+      ) {
+        lastWordActivityAtRef.current = performance.now();
+        lastFullTextWordCountRef.current = liveWordsCount;
+        lastFullTextValueRef.current = text;
+        livePauseMsRef.current = 0;
+        store.patch({
+          activePauseMs: 0,
+          isPausedLive: false,
+          isSpeaking: true,
+          currentSilenceSec: 0,
+        });
+      }
+    },
+    [store]
+  );
 
   const applyTranscriptPayload = useCallback(
     (payload) => {
@@ -444,11 +581,45 @@ export function useSpeechAnalytics(
       if (liveWordsCount > 0) {
         markFirstSpeechDetected();
       }
-      setWords(safeWords);
-      setWordCount(liveWordsCount);
-      setLiveTranscript(fullText);
+      wordsRef.current = safeWords;
+      wordCountRef.current = liveWordsCount;
+      liveTranscriptRef.current = fullText;
+
+      const { committedText, partialText } = computePartialText(safeWords, fullText);
+      // Urgent partial tail update for snappy live typing feel
+      store.patch({
+        partialText,
+        fullText,
+        wordCount: liveWordsCount,
+      });
+
+      // Defer non-urgent block chunking, pause gap scans, filler analysis & WPM recalculation
+      startTransition(() => {
+        const prevBlocks = store.getState().committedBlocks;
+        const committedBlocks = buildCommittedBlocks(safeWords, prevBlocks);
+        const committed = computeCommittedWordPauses(safeWords, PAUSE_DURATION_THRESHOLD_MS);
+        committedPausesRef.current = committed;
+
+        if (committed.gaps.length > loggedGapCountRef.current) {
+          for (let i = loggedGapCountRef.current; i < committed.gaps.length; i += 1) {
+            logger.debug('Committed word gap detected', committed.gaps[i]);
+          }
+          loggedGapCountRef.current = committed.gaps.length;
+        }
+
+        const { fillerCount, fillerBreakdown } = analyzeFillers(fullText, speechLangRef.current);
+
+        store.patch({
+          committedWords: safeWords,
+          committedBlocks,
+          committedText,
+          fillerCount,
+          fillerBreakdown,
+        });
+        syncDerivedMetricsToStore(activeElapsedSecRef.current);
+      });
     },
-    [markFirstSpeechDetected]
+    [markFirstSpeechDetected, store, syncDerivedMetricsToStore]
   );
 
   const handleThrottledTranscript = useCallback(
@@ -492,7 +663,7 @@ export function useSpeechAnalytics(
         }, waitMs);
       }
     },
-    [applyTranscriptPayload]
+    [applyTranscriptPayload, trackWordActivity]
   );
 
   const startSpeechRecognition = useCallback(() => {
@@ -502,7 +673,6 @@ export function useSpeechAnalytics(
 
     if (!SpeechRecognitionCtor || isSimulatedMicRef.current) {
       setEstimationMethod('audio_burst');
-      estimationMethodRef.current = 'audio_burst';
       return;
     }
 
@@ -541,19 +711,32 @@ export function useSpeechAnalytics(
         if (nextTotal > 0) {
           markFirstSpeechDetected();
           lastWordActivityAtRef.current = performance.now();
-          setLivePauseMs(0);
-          setIsSpeaking(true);
+          livePauseMsRef.current = 0;
+          store.patch({
+            activePauseMs: 0,
+            isPausedLive: false,
+            isSpeaking: true,
+            currentSilenceSec: 0,
+          });
         }
-        setWordCount(nextTotal);
+        wordCountRef.current = nextTotal;
         if (recentText) {
-          setLiveTranscript(recentText.slice(-90));
+          const clipped = recentText.slice(-90);
+          liveTranscriptRef.current = clipped;
+          const { fillerCount, fillerBreakdown } = analyzeFillers(clipped, speechLangRef.current);
+          store.patch({
+            partialText: clipped,
+            fullText: clipped,
+            fillerCount,
+            fillerBreakdown,
+          });
         }
+        syncDerivedMetricsToStore(activeElapsedSecRef.current);
       };
 
       recognition.onerror = (event) => {
         if (event.error) {
           setEstimationMethod('audio_burst');
-          estimationMethodRef.current = 'audio_burst';
         }
       };
 
@@ -567,7 +750,6 @@ export function useSpeechAnalytics(
             recognition.start();
           } catch {
             setEstimationMethod('audio_burst');
-            estimationMethodRef.current = 'audio_burst';
           }
         }
       };
@@ -576,9 +758,8 @@ export function useSpeechAnalytics(
       recognitionRef.current = recognition;
     } catch {
       setEstimationMethod('audio_burst');
-      estimationMethodRef.current = 'audio_burst';
     }
-  }, []);
+  }, [markFirstSpeechDetected, setEstimationMethod, store, syncDerivedMetricsToStore]);
 
   const startAnalysisLoop = useCallback(() => {
     const timeDomainBuffer = analyserRef.current
@@ -690,7 +871,7 @@ export function useSpeechAnalytics(
     };
 
     rafIdRef.current = requestAnimationFrame(tick);
-  }, [pushAudioRms]);
+  }, [markFirstSpeechDetected, pushAudioRms, setWordCount]);
 
   // Pre-warm WASM runtime & verify CacheStorage on mount when idle
   useEffect(() => {
@@ -707,7 +888,11 @@ export function useSpeechAnalytics(
     const adapter = engineFactoryRef.current
       ? engineFactoryRef.current()
       : createDefaultAsrEngine();
-    setModelProgress({ percent: 0, cached: false, ready: false });
+    store.patch({
+      modelProgress: { percent: 0, cached: false, ready: false },
+      isWarmingUp: true,
+      wasmMode: detectWasmMode(),
+    });
 
     const initPromise = adapter
       .init({
@@ -716,7 +901,11 @@ export function useSpeechAnalytics(
           if (liveCallbacksRef.current.onProgress) {
             liveCallbacksRef.current.onProgress({ percent, cached });
           } else if (!cancelled) {
-            setModelProgress({ percent, cached, ready: percent >= 100 });
+            const ready = percent >= 100;
+            store.patch({
+              modelProgress: { percent, cached, ready },
+              isWarmingUp: !ready,
+            });
           }
         },
         onTranscript: (payload) => {
@@ -728,26 +917,32 @@ export function useSpeechAnalytics(
           } else {
             logger.error('WASM ASR warmup error', { err });
             if (!cancelled) {
-              setEngineError(err?.message || 'ASR engine error');
-              setModelProgress({ percent: 0, cached: false, ready: false });
+              store.patch({
+                engineError: err?.message || 'ASR engine error',
+                modelProgress: { percent: 0, cached: false, ready: false },
+                isWarmingUp: false,
+              });
             }
           }
         },
       })
       .then(() => {
         if (!cancelled && !liveCallbacksRef.current.onProgress) {
-          setModelProgress((prev) => ({ ...prev, percent: 100, ready: true }));
+          const prev = store.getState().modelProgress;
+          store.patch({
+            modelProgress: { ...prev, percent: 100, ready: true },
+            isWarmingUp: false,
+          });
         }
       });
 
-    // Attach catch so idle warmup rejection doesn't create an unhandled rejection before Start
     initPromise.catch(() => {});
     warmedEngineRef.current = { adapter, lang: activeLang, initPromise };
 
     return () => {
       cancelled = true;
     };
-  }, [isRunning, isSimulatedMic, speechLang]);
+  }, [isRunning, isSimulatedMic, speechLang, store]);
 
   useEffect(() => {
     return () => {
@@ -807,13 +1002,11 @@ export function useSpeechAnalytics(
 
       if (isSimulatedMicRef.current) {
         setEstimationMethod('audio_burst');
-        estimationMethodRef.current = 'audio_burst';
         startAnalysisLoop();
         return;
       }
 
-      setMicError(null);
-      setEngineError(null);
+      store.patch({ micError: null, engineError: null });
 
       const useWasmPipeline =
         Boolean(engineFactoryRef.current) || typeof globalThis.Worker !== 'undefined';
@@ -838,15 +1031,18 @@ export function useSpeechAnalytics(
 
         asrEngineRef.current = adapter;
         if (!canReuseWarmed) {
-          setModelProgress({ percent: 0, cached: false, ready: false });
+          store.patch({
+            modelProgress: { percent: 0, cached: false, ready: false },
+            isWarmingUp: true,
+          });
         }
 
         const onProgressCb = ({ percent, cached }) => {
           if (!cancelled) {
-            setModelProgress({
-              percent,
-              cached,
-              ready: percent >= 100,
+            const ready = percent >= 100;
+            store.patch({
+              modelProgress: { percent, cached, ready },
+              isWarmingUp: !ready,
             });
           }
         };
@@ -857,7 +1053,10 @@ export function useSpeechAnalytics(
         const onErrorCb = (err) => {
           logger.error('WASM ASR engine error', { err });
           if (!cancelled) {
-            setEngineError(err?.message || 'ASR engine error');
+            store.patch({
+              engineError: err?.message || 'ASR engine error',
+              isWarmingUp: false,
+            });
           }
         };
         liveCallbacksRef.current = {
@@ -884,9 +1083,12 @@ export function useSpeechAnalytics(
             return;
           }
 
-          setModelProgress((prev) => ({ ...prev, percent: 100, ready: true }));
+          const prevProg = store.getState().modelProgress;
+          store.patch({
+            modelProgress: { ...prevProg, percent: 100, ready: true },
+            isWarmingUp: false,
+          });
           setEstimationMethod('speech_api');
-          estimationMethodRef.current = 'speech_api';
 
           const capture = await micCaptureFactoryRef.current({
             onChunk: (chunk) => adapter.pushAudio(chunk),
@@ -904,25 +1106,25 @@ export function useSpeechAnalytics(
         } catch (err) {
           adapter.destroy();
           asrEngineRef.current = null;
-          // If microphone itself failed, switch to Demo Speech Simulator
           if (err?.message && /mediaDevices|Permission|Audio/i.test(err.message)) {
             logger.error('Mic capture error in WASM pipeline', { err });
             if (!cancelled) {
-              setMicError(err.message);
+              store.patch({ micError: err.message });
               setIsSimulatedMic(true);
               isSimulatedMicRef.current = true;
               setEstimationMethod('audio_burst');
-              estimationMethodRef.current = 'audio_burst';
               startAnalysisLoop();
             }
             return;
           }
           logger.error('WASM ASR pipeline failed, falling back to legacy speech/burst', { err });
           if (!cancelled) {
-            setEngineError(err?.message || 'ASR engine initialization failed');
-            setModelProgress({ percent: 0, cached: false, ready: false });
+            store.patch({
+              engineError: err?.message || 'ASR engine initialization failed',
+              modelProgress: { percent: 0, cached: false, ready: false },
+              isWarmingUp: false,
+            });
           }
-          // Fall through to Web Speech / Audio Burst fallback
         }
       }
 
@@ -930,13 +1132,13 @@ export function useSpeechAnalytics(
         await initLegacyMicPipeline();
       } catch (err) {
         if (cancelled) return;
-        setMicError(
-          err?.message || 'Microphone unavailable — switched to Demo Speech Simulator'
-        );
+        store.patch({
+          micError:
+            err?.message || 'Microphone unavailable — switched to Demo Speech Simulator',
+        });
         setIsSimulatedMic(true);
         isSimulatedMicRef.current = true;
         setEstimationMethod('audio_burst');
-        estimationMethodRef.current = 'audio_burst';
         startAnalysisLoop();
       }
     }
@@ -953,34 +1155,39 @@ export function useSpeechAnalytics(
     isSimulatedMic,
     handleThrottledTranscript,
     pushAudioRms,
+    setEstimationMethod,
     startAnalysisLoop,
     startSpeechRecognition,
     stopAudioAndSpeech,
+    store,
   ]);
 
   // Live active pause timer while recording after >= 1 spoken word
   useEffect(() => {
     if (!isRunning) {
-      setLivePauseMs(0);
+      livePauseMsRef.current = 0;
+      syncDerivedMetricsToStore(activeElapsedSecRef.current);
       return undefined;
     }
     const intervalId = setInterval(() => {
       if (lastWordActivityAtRef.current === null || hasPartialStreamingRef.current) {
-        setLivePauseMs(0);
+        livePauseMsRef.current = 0;
+        syncDerivedMetricsToStore(activeElapsedSecRef.current);
         return;
       }
       const elapsedSinceLastWord = performance.now() - lastWordActivityAtRef.current;
       if (elapsedSinceLastWord >= PAUSE_DURATION_THRESHOLD_MS) {
-        setLivePauseMs(elapsedSinceLastWord);
-        setIsSpeaking(false);
+        livePauseMsRef.current = elapsedSinceLastWord;
+        store.patch({ isSpeaking: false });
       } else {
-        setLivePauseMs(0);
-        setIsSpeaking(true);
+        livePauseMsRef.current = 0;
+        store.patch({ isSpeaking: true });
       }
+      syncDerivedMetricsToStore(activeElapsedSecRef.current);
     }, LIVE_PAUSE_POLL_MS);
 
     return () => clearInterval(intervalId);
-  }, [isRunning]);
+  }, [isRunning, store, syncDerivedMetricsToStore]);
 
   const resetAnalytics = useCallback(() => {
     stopAudioAndSpeech();
@@ -992,131 +1199,55 @@ export function useSpeechAnalytics(
     startElapsedRef.current = null;
     firstSpeechSecRef.current = null;
     wordSamplesRef.current = [];
+    wordsRef.current = [];
+    wordCountRef.current = 0;
+    liveTranscriptRef.current = '';
+    livePauseMsRef.current = 0;
+    committedPausesRef.current = { pauseCount: 0, totalPauseMs: 0, gaps: [] };
     lastWordActivityAtRef.current = null;
     lastFullTextWordCountRef.current = 0;
     lastFullTextValueRef.current = '';
     hasPartialStreamingRef.current = false;
     loggedGapCountRef.current = 0;
-
-    setRmsLevel(0);
-    setFrequencyBars(new Array(BAR_COUNT).fill(0.05));
-    setWordCount(0);
-    setWords([]);
-    setLivePauseMs(0);
-    setIsSpeaking(false);
-    setLiveTranscript('');
-    setPacingTimeline([]);
     lastTimelineBucketRef.current = -1;
-    setMicError(null);
-    setEngineError(null);
+
     setIsSimulatingSilence(false);
 
     const hasSpeechApi =
       typeof window !== 'undefined' &&
       Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
     const nextMethod = hasSpeechApi && !isSimulatedMicRef.current ? 'speech_api' : 'audio_burst';
-    setEstimationMethod(nextMethod);
     estimationMethodRef.current = nextMethod;
-  }, [stopAudioAndSpeech]);
 
-  // Completed pauses strictly from committedWords timestamps + live active pause timer
-  const committedPauses = useMemo(
-    () => computeCommittedWordPauses(words, PAUSE_DURATION_THRESHOLD_MS),
-    [words]
-  );
-
-  useEffect(() => {
-    if (committedPauses.gaps.length > loggedGapCountRef.current) {
-      for (let i = loggedGapCountRef.current; i < committedPauses.gaps.length; i += 1) {
-        logger.debug('Committed word gap detected', committedPauses.gaps[i]);
-      }
-      loggedGapCountRef.current = committedPauses.gaps.length;
-    }
-  }, [committedPauses.gaps]);
-
-  const hasLiveActivePause = isRunning && livePauseMs >= PAUSE_DURATION_THRESHOLD_MS;
-  const effectivePauseCount = committedPauses.pauseCount + (hasLiveActivePause ? 1 : 0);
-  const effectiveTotalPauseSec = Number(
-    ((committedPauses.totalPauseMs + (hasLiveActivePause ? livePauseMs : 0)) / 1000).toFixed(1)
-  );
-  const effectiveIsSilentPause = hasLiveActivePause;
-  const effectiveCurrentSilenceSec = hasLiveActivePause
-    ? Number((livePauseMs / 1000).toFixed(1))
-    : 0;
-
-  // Synchronize active-speech start timestamp and 15s rolling word samples before computing WPM
-  if (isRunning) {
-    if (startElapsedRef.current === null) {
-      startElapsedRef.current = activeElapsedSec;
-    }
-    if (wordCount > 0) {
-      const samples = wordSamplesRef.current;
-      const last = samples[samples.length - 1];
-      if (last && last.t === activeElapsedSec) {
-        last.words = wordCount;
-      } else {
-        samples.push({ t: activeElapsedSec, words: wordCount });
-      }
-    }
-  }
-
-  const speakingElapsedSec = Math.max(0, activeElapsedSec - (firstSpeechSecRef.current ?? 0));
-
-  const wpm = useMemo(() => {
-    return computeOverallWpm(wordCount, speakingElapsedSec);
-  }, [speakingElapsedSec, wordCount]);
-
-  const rollingWpm = useMemo(() => {
-    return computeRollingWpm(
-      wordSamplesRef.current,
-      activeElapsedSec,
-      firstSpeechSecRef.current ?? 0
-    );
-  }, [activeElapsedSec, wordCount]);
-
-  // Record 10-second pacing timeline snapshots while running
-  useEffect(() => {
-    if (!isRunning || activeElapsedSec <= 0) return;
-    const bucket = Math.floor(activeElapsedSec / 10);
-    if (
-      bucket > lastTimelineBucketRef.current &&
-      activeElapsedSec >= 10 &&
-      activeElapsedSec % 10 === 0
-    ) {
-      lastTimelineBucketRef.current = bucket;
-      setPacingTimeline((prev) => [...prev, { sec: activeElapsedSec, wpm }]);
-    }
-  }, [isRunning, activeElapsedSec, wpm]);
-
-  const { fillerCount, fillerBreakdown } = useMemo(
-    () => analyzeFillers(liveTranscript, speechLang),
-    [liveTranscript, speechLang]
-  );
-
-  const pacingZone = useMemo(() => {
-    if (wpm === 0) return 'warming_up';
-    if (wpm < 110) return 'too_slow';
-    if (wpm <= 160) return 'optimal';
-    return 'too_fast';
-  }, [wpm]);
+    const currentProgress = store.getState().modelProgress;
+    store.reset();
+    store.patch({
+      activeLang: speechLangRef.current,
+      wasmMode: detectWasmMode(),
+      estimationMethod: nextMethod,
+      modelProgress: currentProgress,
+    });
+  }, [stopAudioAndSpeech, store]);
 
   return {
-    rmsLevel,
-    frequencyBars,
+    get rmsLevel() {
+      return liveRmsRef.current;
+    },
+    frequencyBars: INITIAL_BARS,
     liveRmsRef,
     liveBarsRef,
-    wordCount,
-    words,
+    wordCount: snapshot.wordCount,
+    words: snapshot.committedWords,
     setWordCount,
-    wpm,
-    rollingWpm,
-    pacingZone,
-    pauseCount: effectivePauseCount,
-    totalPauseSec: effectiveTotalPauseSec,
-    isSilentPause: effectiveIsSilentPause,
-    isSpeaking,
-    currentSilenceSec: effectiveCurrentSilenceSec,
-    estimationMethod,
+    wpm: snapshot.wpm,
+    rollingWpm: snapshot.rollingWpm,
+    pacingZone: snapshot.pacingZone,
+    pauseCount: snapshot.longPausesCount,
+    totalPauseSec: snapshot.totalPauseSec,
+    isSilentPause: snapshot.isPausedLive,
+    isSpeaking: snapshot.isSpeaking,
+    currentSilenceSec: snapshot.currentSilenceSec,
+    estimationMethod: snapshot.estimationMethod,
     setEstimationMethod,
     silenceThreshold,
     setSilenceThreshold,
@@ -1126,14 +1257,17 @@ export function useSpeechAnalytics(
     setIsSimulatedMic,
     isSimulatingSilence,
     setIsSimulatingSilence,
-    micError,
-    engineError,
-    liveTranscript,
-    transcript: liveTranscript,
-    fillerCount,
-    fillerBreakdown,
-    pacingTimeline,
-    modelProgress,
+    micError: snapshot.micError,
+    engineError: snapshot.engineError,
+    liveTranscript: snapshot.fullText,
+    transcript: snapshot.fullText,
+    committedBlocks: snapshot.committedBlocks,
+    partialText: snapshot.partialText,
+    wasmMode: snapshot.wasmMode,
+    fillerCount: snapshot.fillerCount,
+    fillerBreakdown: snapshot.fillerBreakdown,
+    pacingTimeline: snapshot.pacingTimeline,
+    modelProgress: snapshot.modelProgress,
     resetAnalytics,
   };
 }
