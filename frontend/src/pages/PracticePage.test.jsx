@@ -51,7 +51,12 @@ describe('PracticePage', () => {
     );
 
     expect(screen.getByTestId('wasm-progress-bar')).toBeInTheDocument();
+    expect(screen.getByTestId('wasm-mode-pill')).toHaveTextContent(/ST-WASM|MT-WASM/);
+    expect(screen.getByTestId('wasm-mode-pill')).toHaveTextContent(/en-US/);
     expect(screen.getByTestId('live-filler-count')).toBeInTheDocument();
+
+    const startBtn = screen.getByRole('button', { name: /Start rehearsal/i });
+    expect(startBtn.className).toContain('min-h-[48px]');
 
     // Presets 1m, 3m, 5m, 10m & Custom
     fireEvent.click(screen.getByRole('button', { name: '5m' }));

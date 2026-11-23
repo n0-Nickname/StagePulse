@@ -84,4 +84,38 @@ describe('useTimer', () => {
     unmount();
     zeroHook.unmount();
   });
+
+  it('drives timer display refs via requestAnimationFrame + performance.now without setInterval', () => {
+    const remainingEl = document.createElement('div');
+    const elapsedEl = document.createElement('span');
+    const progressEl = document.createElement('div');
+
+    const { result, unmount } = renderHook(() => useTimer(20));
+    result.current.remainingDisplayRef.current = remainingEl;
+    result.current.elapsedDisplayRef.current = elapsedEl;
+    result.current.progressBarRef.current = progressEl;
+
+    act(() => {
+      result.current.start();
+    });
+    expect(remainingEl.textContent).toBe('0:20');
+    expect(elapsedEl.textContent).toBe('0:00');
+
+    act(() => {
+      fakeNow += 5000;
+      vi.advanceTimersByTime(5000);
+    });
+    expect(remainingEl.textContent).toBe('0:15');
+    expect(elapsedEl.textContent).toBe('0:05');
+    expect(progressEl.style.transform).toBe('scaleX(0.25)');
+    expect(result.current.getElapsedSec()).toBe(5);
+
+    act(() => {
+      result.current.reset();
+    });
+    expect(remainingEl.textContent).toBe('0:20');
+    expect(elapsedEl.textContent).toBe('0:00');
+    expect(progressEl.style.transform).toBe('scaleX(0)');
+    unmount();
+  });
 });

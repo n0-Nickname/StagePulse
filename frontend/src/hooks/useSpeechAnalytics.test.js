@@ -3,6 +3,7 @@ import { renderHook, act, waitFor } from '@testing-library/react';
 import {
   useSpeechAnalytics,
   computeWordTimestampPauses,
+  computeActiveSpeakingSec,
   computeOverallWpm,
   computeRollingWpm,
   countNormalizedWords,
@@ -1084,6 +1085,78 @@ describe('useSpeechAnalytics', () => {
 
     vi.unstubAllEnvs();
     vi.useRealTimers();
+    unmount();
+  });
+
+  it('caps extreme inter-word pause outliers (>15000ms) from skewing session average WPM while keeping active speaking time accurate', async () => {
+    // 1) Pure helper: 10s gap (<=15s) keeps full speaking time; 60s gap (>15s) caps excess 45s
+    expect(
+      computeActiveSpeakingSec(20, [
+        { text: 'a', startMs: 0, endMs: 1000 },
+        { text: 'b', startMs: 11000, endMs: 12000 },
+      ])
+    ).toBe(20);
+
+    expect(
+      computeActiveSpeakingSec(75, [
+        { text: 'a', startMs: 0, endMs: 5000 },
+        { text: 'b', startMs: 65000, endMs: 70000 }, // 60,000ms gap -> 45,000ms outlier excess
+      ])
+    ).toBe(30); // 75 - 45 = 30s active speaking time
+
+    expect(computeActiveSpeakingSec(30, [], 15000, 20000)).toBe(25); // 20s live silence -> 5s excess capped
+    expect(
+      computeActiveSpeakingSec(30, [
+        { text: 'zero', startMs: 0, endMs: 0 },
+        { text: 'next', startMs: 25000, endMs: 26000 },
+      ])
+    ).toBe(30); // prev.endMs <= 0 skipped
+
+    // 2) Hook integration: 30 words spoken across 75s elapsed with a 60s away-from-mic gap -> WPM reflects 30s active time (60 WPM), not 75s (24 WPM)
+    let callbacks = null;
+    const engineFactory = () => ({
+      init: vi.fn(async (opts) => {
+        callbacks = opts;
+      }),
+      pushAudio: vi.fn(),
+      destroy: vi.fn(),
+    });
+    const micCaptureFactory = vi.fn(async () => ({ stop: vi.fn() }));
+
+    const { result, rerender, unmount } = renderHook(
+      ({ running, elapsed }) =>
+        useSpeechAnalytics(running, elapsed, 'en-US', { engineFactory, micCaptureFactory }),
+      { initialProps: { running: true, elapsed: 75 } }
+    );
+    await waitFor(() => expect(callbacks).not.toBeNull());
+
+    const wordsWithOutlier = [
+      ...Array.from({ length: 15 }, (_, i) => ({
+        text: `w${i}`,
+        startMs: i * 300,
+        endMs: i * 300 + 200,
+      })),
+      ...Array.from({ length: 15 }, (_, i) => ({
+        text: `w${15 + i}`,
+        startMs: 64200 + i * 300, // 60,000ms gap after w14 (endMs=4400)
+        endMs: 64400 + i * 300,
+      })),
+    ];
+
+    act(() => {
+      callbacks.onTranscript({
+        words: wordsWithOutlier,
+        fullText: wordsWithOutlier.map((w) => w.text).join(' '),
+        isFinal: true,
+      });
+    });
+
+    expect(result.current.wordCount).toBe(30);
+    expect(result.current.wpm).toBe(60); // 30 words / (30s / 60) = 60 WPM
+
+    await act(async () => {
+      rerender({ running: false, elapsed: 75 });
+    });
     unmount();
   });
 });

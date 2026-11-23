@@ -98,6 +98,27 @@ describe('App routing, ProtectedRoute, Navbar, and LiveMetricsBar', () => {
     await screen.findByRole('tab', { name: /Log in/i });
   });
 
+  it('lazy-loads SlotMachineModal when Unlock PRO is clicked for non-PRO user', async () => {
+    localStorage.setItem('pt_token', 'tok');
+    authApi.me.mockResolvedValue({
+      id: 2,
+      email: 'free@stagepulse.dev',
+      is_pro: false,
+      spin_count: 0,
+      spins_remaining: 3,
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/practice']}>
+        <App />
+      </MemoryRouter>
+    );
+
+    const unlockBtn = await screen.findByRole('button', { name: /Unlock PRO/i });
+    fireEvent.click(unlockBtn);
+    await screen.findByRole('heading', { name: /Unlock PRO analytics/i });
+  });
+
   it('renders LiveMetricsBar across pacing zones and silent pause state', () => {
     const { rerender } = render(
       <LanguageProvider>
