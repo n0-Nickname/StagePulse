@@ -8,6 +8,8 @@ const DEFAULT_MT_WASM_URL = '/wasm/tinyasr-mt.wasm';
 const ESTIMATED_TOTAL_BYTES = 33_800_000;
 const CHUNK_LOG_INTERVAL_MS = 2000;
 const DEFAULT_PCM_BUFFER_BYTES = 4096;
+const DEFAULT_ENDPOINT_SILENCE_MS = 550;
+const ENDPOINT_SILENCE_RMS = 0.008;
 const HELPER_SPIN = 2000;
 const HELPER_STACK_BYTES = 1 << 20;
 
@@ -53,10 +55,16 @@ let helperWorkers = [];
 let helperBlobUrl = null;
 let modelHandle = 0;
 let sessionHandle = 0;
+let currentActiveLang = 'uk';
+let endpointSilenceMs = DEFAULT_ENDPOINT_SILENCE_MS;
 let pcmBufPtr = 0;
 let pcmBufCapacity = 0;
 let committedWords = [];
 let committedText = '';
+let hasPendingPartial = false;
+let silenceAccumMs = 0;
+let sessionAudioMs = 0;
+let sessionAudioOffsetMs = 0;
 let chunkCounter = 0;
 let lastChunkLogMs = 0;
 let totalAudioMs = 0;
@@ -288,12 +296,13 @@ export function emitEventsFromJson(jsonText) {
     if (ev.type === 'commit' || Array.isArray(ev.words)) {
       const mapped = (ev.words || []).map((w) => ({
         text: w.text || '',
-        startMs: Math.round((w.start ?? 0) * 1000),
-        endMs: Math.round((w.end ?? 0) * 1000),
+        startMs: sessionAudioOffsetMs + Math.round((w.start ?? 0) * 1000),
+        endMs: sessionAudioOffsetMs + Math.round((w.end ?? 0) * 1000),
         join: Boolean(w.join),
       }));
       committedWords = committedWords.concat(mapped);
       committedText = joinCommittedWords(committedWords);
+      hasPendingPartial = false;
       self.postMessage({
         type: 'TRANSCRIPT_UPDATE',
         words: [...committedWords],
@@ -303,6 +312,7 @@ export function emitEventsFromJson(jsonText) {
     } else if (ev.type === 'partial' || 'open' in ev || 'tail' in ev) {
       const openText = extractSegmentText(ev.open);
       const tailText = extractSegmentText(ev.tail);
+      hasPendingPartial = Boolean(openText || tailText);
       const partialText = [committedText, openText, tailText].filter(Boolean).join(' ').trim();
       self.postMessage({
         type: 'TRANSCRIPT_UPDATE',
@@ -337,9 +347,9 @@ function freePcmBuffer() {
   pcmBufCapacity = 0;
 }
 
-function finishActiveSession() {
+function finishActiveSession({ keepPcmBuffer = false } = {}) {
   if (!exportsApi || !sessionHandle) {
-    freePcmBuffer();
+    if (!keepPcmBuffer) freePcmBuffer();
     return;
   }
   try {
@@ -350,7 +360,36 @@ function finishActiveSession() {
   } finally {
     exportsApi.tinyasr_session_free(sessionHandle);
     sessionHandle = 0;
-    freePcmBuffer();
+    if (!keepPcmBuffer) {
+      freePcmBuffer();
+    }
+  }
+}
+
+function openAsrSession(activeLang) {
+  const langsCstr = allocCString(activeLang);
+  const startLangCstr = allocCString(activeLang);
+
+  try {
+    sessionHandle = exportsApi.tinyasr_session_new(
+      modelHandle,
+      langsCstr.ptr,
+      startLangCstr.ptr,
+      exportsApi.tinyasr_clock(),
+      1
+    );
+    if (!sessionHandle) {
+      throw new Error('tinyasr_session_new failed');
+    }
+    ensurePcmBuffer(DEFAULT_PCM_BUFFER_BYTES);
+    logger.info('tinyasr_session_new succeeded', {
+      sessionHandle,
+      lang: activeLang,
+      wasmBinary: activeWasmBinary,
+    });
+  } finally {
+    exportsApi.tinyasr_dealloc(langsCstr.ptr, langsCstr.len);
+    exportsApi.tinyasr_dealloc(startLangCstr.ptr, startLangCstr.len);
   }
 }
 
@@ -494,11 +533,17 @@ export async function initEngine({
   modelUrl = DEFAULT_MODEL_URL,
   vadUrl = DEFAULT_VAD_URL,
   wasmUrl,
+  endpointSilenceMs: customEndpointMs,
 }) {
   logger.info('INIT start', { lang, modelUrl, vadUrl, wasmUrl });
   finishActiveSession();
   committedWords = [];
   committedText = '';
+  hasPendingPartial = false;
+  silenceAccumMs = 0;
+  sessionAudioMs = 0;
+  sessionAudioOffsetMs = 0;
+  endpointSilenceMs = Number(customEndpointMs) > 0 ? Number(customEndpointMs) : DEFAULT_ENDPOINT_SILENCE_MS;
   chunkCounter = 0;
   lastChunkLogMs = 0;
   totalAudioMs = 0;
@@ -585,31 +630,8 @@ export async function initEngine({
     exportsApi.tinyasr_dealloc(errPtr, 256);
   }
 
-  const activeLang = String(lang).startsWith('uk') ? 'uk' : 'en';
-  const langsCstr = allocCString(activeLang);
-  const startLangCstr = allocCString(activeLang);
-
-  try {
-    sessionHandle = exportsApi.tinyasr_session_new(
-      modelHandle,
-      langsCstr.ptr,
-      startLangCstr.ptr,
-      exportsApi.tinyasr_clock(),
-      1
-    );
-    if (!sessionHandle) {
-      throw new Error('tinyasr_session_new failed');
-    }
-    ensurePcmBuffer(DEFAULT_PCM_BUFFER_BYTES);
-    logger.info('tinyasr_session_new succeeded', {
-      sessionHandle,
-      lang: activeLang,
-      wasmBinary: activeWasmBinary,
-    });
-  } finally {
-    exportsApi.tinyasr_dealloc(langsCstr.ptr, langsCstr.len);
-    exportsApi.tinyasr_dealloc(startLangCstr.ptr, startLangCstr.len);
-  }
+  currentActiveLang = String(lang).startsWith('uk') ? 'uk' : 'en';
+  openAsrSession(currentActiveLang);
 
   self.postMessage({ type: 'MODEL_READY' });
 }
@@ -636,6 +658,8 @@ self.onmessage = async (event) => {
       const samples = normalizePcmChunk(payload.samples);
       chunkCounter += 1;
       const audioMs = (samples.length / 16000) * 1000;
+      sessionAudioMs += audioMs;
+      const rms = computeChunkRms(samples);
       const pcmPtr = ensurePcmBuffer(samples.byteLength);
       new Float32Array(getMemoryBuffer(), pcmPtr, samples.length).set(samples);
 
@@ -654,7 +678,7 @@ self.onmessage = async (event) => {
           chunkCount: chunkCounter,
           sampleCount: samples.length,
           sampleRate: 16000,
-          rms: Number(computeChunkRms(samples).toFixed(5)),
+          rms: Number(rms.toFixed(5)),
           wasmBinary: activeWasmBinary,
           crossOriginIsolated: Boolean(self.crossOriginIsolated),
           inferMs: Number(inferMs.toFixed(2)),
@@ -668,6 +692,24 @@ self.onmessage = async (event) => {
         if (rawJson && rawJson !== '[]') {
           logger.debug('tinyasr_session_push raw events', { json: rawJson });
           emitEventsFromJson(rawJson);
+        }
+      }
+
+      if (rms >= ENDPOINT_SILENCE_RMS) {
+        silenceAccumMs = 0;
+      } else if (hasPendingPartial) {
+        silenceAccumMs += audioMs;
+        if (silenceAccumMs >= endpointSilenceMs) {
+          logger.debug('Endpointing flush after post-speech silence', {
+            silenceMs: Math.round(silenceAccumMs),
+            endpointSilenceMs,
+          });
+          finishActiveSession({ keepPcmBuffer: true });
+          sessionAudioOffsetMs += Math.round(sessionAudioMs);
+          sessionAudioMs = 0;
+          silenceAccumMs = 0;
+          hasPendingPartial = false;
+          openAsrSession(currentActiveLang);
         }
       }
     } catch (err) {
@@ -684,5 +726,9 @@ self.onmessage = async (event) => {
     finishActiveSession();
     committedWords = [];
     committedText = '';
+    hasPendingPartial = false;
+    silenceAccumMs = 0;
+    sessionAudioMs = 0;
+    sessionAudioOffsetMs = 0;
   }
 };
