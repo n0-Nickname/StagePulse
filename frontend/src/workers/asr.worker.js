@@ -589,7 +589,6 @@ export async function initEngine({
     }
   }
 
-  logger.error("DEBUG_BYTES", { modelLen: modelRes.bytes.length, modelHead: Array.from(modelRes.bytes.slice(0, 8)), vadLen: vadRes.bytes.length, vadHead: Array.from(vadRes.bytes.slice(0, 8)) });
   const modelAlloc = allocBytes(modelRes.bytes);
   const vadAlloc = allocBytes(vadRes.bytes);
   const errPtr = exportsApi.tinyasr_alloc(256);
