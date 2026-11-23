@@ -9,8 +9,8 @@ from app.core.database import get_db
 from app.core.security import get_current_user
 from app.slots.schemas import (
     BASE_WIN_RATE,
-    JACKPOT_SYMBOLS,
     MAX_SPINS_CAP,
+    MILESTONE_SYMBOLS,
     SYMBOLS,
     SpinResponse,
 )
@@ -19,7 +19,7 @@ router = APIRouter(prefix="/api/slots", tags=["slots"])
 
 
 def generate_losing_reels() -> tuple[str, str, str]:
-    """Generate 3 symbols guaranteed not to be all identical."""
+    """Generate 3 milestone symbols that are not all identical."""
     while True:
         reels = (
             random.choice(SYMBOLS),  # noqa: S311
@@ -31,7 +31,7 @@ def generate_losing_reels() -> tuple[str, str, str]:
 
 
 async def spin_slot_machine(db: AsyncSession, user: User) -> SpinResponse:
-    """Execute a slot spin with RNG and deterministic 3rd-spin pity jackpot."""
+    """Evaluate a Speech Performance Milestone check toward Pace Mastery PRO."""
     if user.is_pro:
         return SpinResponse(
             reels=("DIAMOND", "DIAMOND", "DIAMOND"),
@@ -43,25 +43,27 @@ async def spin_slot_machine(db: AsyncSession, user: User) -> SpinResponse:
         )
 
     user.spin_count += 1
-    is_pity_spin = user.spin_count % MAX_SPINS_CAP == 0
-    is_win = True if is_pity_spin else (random.random() < BASE_WIN_RATE)  # noqa: S311
+    is_cycle_milestone = user.spin_count % MAX_SPINS_CAP == 0
+    is_win = True if is_cycle_milestone else (random.random() < BASE_WIN_RATE)  # noqa: S311
 
     if is_win:
         user.is_pro = True
-        jackpot_symbol = (
-            "DIAMOND" if is_pity_spin else random.choice(JACKPOT_SYMBOLS)  # noqa: S311
+        milestone_symbol = (
+            "DIAMOND" if is_cycle_milestone else random.choice(MILESTONE_SYMBOLS)  # noqa: S311
         )
-        reels: tuple[str, str, str] = (jackpot_symbol, jackpot_symbol, jackpot_symbol)
+        reels: tuple[str, str, str] = (milestone_symbol, milestone_symbol, milestone_symbol)
         spins_remaining = 0
         message = (
-            "JACKPOT! 3rd-Spin Pity Guarantee triggered — PRO Unlocked!"
-            if is_pity_spin
-            else "JACKPOT! Lucky spin — PRO Unlocked!"
+            "Pace Mastery Milestone Achieved — PRO Unlocked!"
+            if is_cycle_milestone
+            else "Speech Performance Milestone Complete — PRO Unlocked!"
         )
     else:
         reels = generate_losing_reels()
         spins_remaining = max(0, MAX_SPINS_CAP - user.spin_count)
-        message = f"No match! {spins_remaining} spin(s) left until guaranteed PRO jackpot."
+        message = (
+            "Keep refining your pacing! Complete another speech check to advance Pace Mastery."
+        )
 
     db.add(user)
     await db.commit()
@@ -82,5 +84,5 @@ async def spin_slots(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> SpinResponse:
-    """Spin the 3-reel Gacha slot machine to unlock PRO features."""
+    """Evaluate speech performance milestones toward Pace Mastery PRO unlock."""
     return await spin_slot_machine(db=db, user=current_user)
