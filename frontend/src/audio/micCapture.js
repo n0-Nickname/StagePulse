@@ -5,9 +5,9 @@ export const CHUNK_SAMPLES = 640; // 40ms at 16kHz (within 40-60ms batch window)
 export const SILENT_MIC_PEAK_THRESHOLD = 0.001;
 export const SILENT_MIC_CHECK_MS = 2000;
 const CHUNK_LOG_INTERVAL_MS = 2000;
-const AGC_TARGET_RMS = 0.08;
-const AGC_NOISE_GATE_RMS = 0.001;
-const AGC_MAX_GAIN = 12;
+const AGC_TARGET_RMS = 0.1;
+const AGC_NOISE_GATE_RMS = 0.0004;
+const AGC_MAX_GAIN = 25;
 
 const logger = createLogger('Audio:Mic');
 
