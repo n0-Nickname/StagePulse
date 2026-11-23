@@ -1,6 +1,10 @@
-export const onRequestGet: PagesFunction = async () => {
+export const onRequestGet: PagesFunction = async (context) => {
+  const path = Array.isArray(context.params.path)
+    ? context.params.path.join("/")
+    : String(context.params.path || "");
+  if (!path) return new Response("Missing path", { status: 400 });
   const res = await fetch(
-    "https://github.com/n0-Nickname/StagePulse/releases/download/v1.0.0-models/en-ru-uk.tzf.gz",
+    `https://github.com/n0-Nickname/StagePulse/releases/download/v1.0.0-models/${path}`,
     { headers: { "User-Agent": "Cloudflare-Pages-Proxy" } }
   );
   if (!res.ok || !res.body) {
