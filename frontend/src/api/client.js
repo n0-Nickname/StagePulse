@@ -170,3 +170,16 @@ export const presentationsApi = {
     });
   },
 };
+
+export function getFillerDictionary() {
+  return apiFetch('/api/v1/filler-dictionary', {
+    method: 'GET',
+  });
+}
+
+export function updateFillerDictionary(words) {
+  return apiFetch('/api/v1/filler-dictionary', {
+    method: 'PUT',
+    body: JSON.stringify({ words }),
+  });
+}
