@@ -4,6 +4,8 @@ import {
   authApi,
   slotsApi,
   presentationsApi,
+  getFillerDictionary,
+  updateFillerDictionary,
   formatApiError,
 } from './client.js';
 import { translations } from '../i18n/translations.js';
@@ -137,8 +139,23 @@ describe('api/client.js', () => {
     await slotsApi.spin();
     await presentationsApi.create({ title: 'Talk' });
     await presentationsApi.list();
+    await getFillerDictionary();
+    await updateFillerDictionary(['like', 'як би']);
 
-    expect(fetchMock).toHaveBeenCalledTimes(6);
+    expect(fetchMock).toHaveBeenCalledTimes(8);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      7,
+      '/api/v1/filler-dictionary',
+      expect.objectContaining({ method: 'GET' })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      8,
+      '/api/v1/filler-dictionary',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ words: ['like', 'як би'] }),
+      })
+    );
   });
 
   it('formatApiError localizes all 422, 400, 401, network, and fallback error variants', () => {

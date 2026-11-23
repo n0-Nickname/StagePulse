@@ -12,6 +12,9 @@ import {
   buildCommittedBlocks,
   computePartialText,
   detectWasmMode,
+  normalizeFillerWords,
+  buildFillerRegex,
+  segmentTextByFillers,
   COMMITTED_BLOCK_WORD_SIZE,
 } from './speechStore.js';
 
@@ -41,8 +44,12 @@ describe('speechStore', () => {
     }
     function FillerReader() {
       fillerRenders += 1;
-      const { fillerCount, fillerWords } = useFillerMetrics(store);
-      return <div data-testid="filler">{`${fillerCount}-${Object.keys(fillerWords).length}`}</div>;
+      const { isPro, userFillerWords, fillerCount, fillerWords } = useFillerMetrics(store);
+      return (
+        <div data-testid="filler">
+          {`${isPro}-${userFillerWords.length}-${fillerCount}-${Object.keys(fillerWords).length}`}
+        </div>
+      );
     }
     function TailReader() {
       tailRenders += 1;
@@ -115,11 +122,23 @@ describe('speechStore', () => {
     expect(pauseRenders).toBe(2);
     expect(wpmRenders).toBe(2);
 
-    // Filler change -> ONLY FillerReader re-renders
+    // Non-PRO suppresses fillerCount/fillerBreakdown even if patched
     act(() => {
-      store.patch({ fillerCount: 2, fillerBreakdown: { like: 2 } });
+      store.patch({ fillerCount: 5, fillerBreakdown: { like: 5 } });
     });
-    expect(screen.getByTestId('filler')).toHaveTextContent('2-1');
+    expect(screen.getByTestId('filler')).toHaveTextContent('false-0-0-0');
+    expect(fillerRenders).toBe(1);
+
+    // PRO + custom dictionary + filler change -> ONLY FillerReader re-renders
+    act(() => {
+      store.patch({
+        isPro: true,
+        userFillerWords: ['like'],
+        fillerCount: 2,
+        fillerBreakdown: { like: 2 },
+      });
+    });
+    expect(screen.getByTestId('filler')).toHaveTextContent('true-1-2-1');
     expect(fillerRenders).toBe(2);
 
     // Status change -> ONLY StatusReader re-renders
@@ -211,5 +230,31 @@ describe('speechStore', () => {
 
     vi.stubGlobal('crossOriginIsolated', false);
     expect(detectWasmMode()).toBe('ST-WASM');
+  });
+
+  it('normalizes filler words, builds longest-first Unicode regex, and segments text strictly by isPro', () => {
+    expect(normalizeFillerWords(null)).toEqual([]);
+    expect(normalizeFillerWords(['  Like ', 'like', '', 42, '  як   би '])).toEqual([
+      'like',
+      'як би',
+    ]);
+
+    expect(buildFillerRegex([]).regex).toBeNull();
+    expect(segmentTextByFillers('', ['like'], true)).toEqual([]);
+    expect(segmentTextByFillers('Ну типу like', ['ну', 'like'], false)).toEqual([
+      { text: 'Ну типу like', isFiller: false },
+    ]);
+    expect(segmentTextByFillers('Hello world', [], true)).toEqual([
+      { text: 'Hello world', isFiller: false },
+    ]);
+
+    // Longest-first phrase match ('як би' beats 'як') + whole-word boundary check ('подібний' != 'діб')
+    expect(segmentTextByFillers('Це, як би, подібний приклад і як так', ['як', 'як би', 'діб'], true)).toEqual([
+      { text: 'Це, ', isFiller: false },
+      { text: 'як би', isFiller: true },
+      { text: ', подібний приклад і ', isFiller: false },
+      { text: 'як', isFiller: true },
+      { text: ' так', isFiller: false },
+    ]);
   });
 });

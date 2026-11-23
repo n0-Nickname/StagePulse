@@ -7,6 +7,13 @@ import { LanguageProvider } from '../context/LanguageContext.jsx';
 
 const mockNavigate = vi.fn();
 const mockCreatePresentation = vi.fn();
+const mockGetFillerDictionary = vi.fn();
+const mockUpdateFillerDictionary = vi.fn();
+const mockOpenSlotModal = vi.fn();
+const authState = {
+  user: { id: 1, email: 'speaker@stagepulse.dev', is_pro: true },
+  openSlotModal: mockOpenSlotModal,
+};
 
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual('react-router-dom');
@@ -17,10 +24,7 @@ vi.mock('react-router-dom', async () => {
 });
 
 vi.mock('../context/AuthContext.jsx', () => ({
-  useAuth: () => ({
-    user: { id: 1, email: 'speaker@stagepulse.dev', is_pro: true },
-    openSlotModal: vi.fn(),
-  }),
+  useAuth: () => authState,
 }));
 
 vi.mock('../api/client.js', async () => {
@@ -30,6 +34,8 @@ vi.mock('../api/client.js', async () => {
     presentationsApi: {
       create: (...args) => mockCreatePresentation(...args),
     },
+    getFillerDictionary: (...args) => mockGetFillerDictionary(...args),
+    updateFillerDictionary: (...args) => mockUpdateFillerDictionary(...args),
   };
 });
 
@@ -37,6 +43,9 @@ describe('PracticePage', () => {
   beforeEach(() => {
     localStorage.clear();
     vi.clearAllMocks();
+    authState.user = { id: 1, email: 'speaker@stagepulse.dev', is_pro: true };
+    mockGetFillerDictionary.mockResolvedValue({ words: [] });
+    mockUpdateFillerDictionary.mockResolvedValue({ words: [] });
   });
 
   it('renders presets, custom duration, WASM progress bar, simulated mic/silence toggles, and saves session', async () => {
@@ -213,5 +222,153 @@ describe('PracticePage', () => {
     expect(screen.getByTestId('wasm-progress-bar')).toHaveAttribute('aria-valuenow', '100');
 
     delete globalThis.Worker;
+  });
+
+  it('locks filler KPI card and custom dictionary behind PRO badge/upgrade CTA for non-PRO users', () => {
+    authState.user = { id: 2, email: 'free@stagepulse.dev', is_pro: false };
+
+    render(
+      <MemoryRouter initialEntries={['/practice']}>
+        <LanguageProvider>
+          <PracticePage />
+        </LanguageProvider>
+      </MemoryRouter>
+    );
+
+    expect(mockGetFillerDictionary).not.toHaveBeenCalled();
+    expect(screen.getByTestId('live-filler-locked')).toBeInTheDocument();
+    expect(screen.getByTestId('filler-dict-locked')).toBeInTheDocument();
+
+    const unlockButtons = screen.getAllByRole('button', { name: /Upgrade to PRO/i });
+    expect(unlockButtons.length).toBe(2);
+    fireEvent.click(unlockButtons[0]);
+    fireEvent.click(unlockButtons[1]);
+    expect(mockOpenSlotModal).toHaveBeenCalledTimes(2);
+  });
+
+  it('allows PRO users to load, add, remove custom filler words with instant scanning and error rollback', async () => {
+    mockGetFillerDictionary.mockResolvedValueOnce({ words: ['like'] });
+    mockUpdateFillerDictionary
+      .mockResolvedValueOnce({ words: ['like', 'як би'] })
+      .mockRejectedValueOnce({ status: 500, message: 'Sync failed' })
+      .mockResolvedValueOnce({ words: [] });
+
+    let rec = null;
+    window.SpeechRecognition = class {
+      start() {
+        rec = this;
+      }
+      abort() {}
+    };
+
+    const { unmount } = render(
+      <MemoryRouter initialEntries={['/practice']}>
+        <LanguageProvider>
+          <PracticePage />
+        </LanguageProvider>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(mockGetFillerDictionary).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText('like')).toBeInTheDocument());
+
+    // Start rehearsal and emit speech containing "як би" (not yet in dictionary)
+    fireEvent.click(screen.getByRole('button', { name: /Start rehearsal/i }));
+    await waitFor(() => expect(rec).not.toBeNull());
+    await act(async () => {
+      rec.onresult({
+        resultIndex: 0,
+        results: [Object.assign([{ transcript: 'Це як би тест' }], { isFinal: true })],
+      });
+    });
+    expect(screen.getByTestId('live-filler-count')).toHaveTextContent('0');
+
+    // Empty and duplicate inputs are ignored without backend calls
+    const input = screen.getByLabelText(/Custom filler word or phrase/i);
+    fireEvent.change(input, { target: { value: '   ' } });
+    fireEvent.submit(input.closest('form'));
+    fireEvent.change(input, { target: { value: 'LIKE' } });
+    fireEvent.submit(input.closest('form'));
+    expect(mockUpdateFillerDictionary).not.toHaveBeenCalled();
+
+    // Add "Як би" -> instant store re-scan updates live-filler-count to 1 and syncs backend
+    fireEvent.change(input, { target: { value: '  Як   би ' } });
+    await act(async () => {
+      fireEvent.submit(input.closest('form'));
+    });
+    await waitFor(() =>
+      expect(mockUpdateFillerDictionary).toHaveBeenCalledWith(['like', 'як би'])
+    );
+    expect(screen.getByTestId('live-filler-count')).toHaveTextContent('1');
+
+    // Backend failure on remove rolls back tags and shows error alert
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Remove як би/i }));
+    });
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Sync failed'));
+    expect(screen.getByText('як би')).toBeInTheDocument();
+
+    // Successful remove
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Remove like/i }));
+    });
+    await waitFor(() => expect(mockUpdateFillerDictionary).toHaveBeenLastCalledWith(['як би']));
+    expect(screen.queryByText('like')).not.toBeInTheDocument();
+
+    // Also cover initial fetch failure & array response fallback on unmount/remount
+    delete window.SpeechRecognition;
+    unmount();
+
+    mockGetFillerDictionary.mockRejectedValueOnce({ status: 500, message: 'Dict load error' });
+    const { unmount: unmountErr } = render(
+      <MemoryRouter initialEntries={['/practice']}>
+        <LanguageProvider>
+          <PracticePage />
+        </LanguageProvider>
+      </MemoryRouter>
+    );
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Dict load error'));
+    unmountErr();
+
+    // Unmount while getFillerDictionary is pending (resolve & reject after unmount) + array payload
+    let resolvePending;
+    let rejectPending;
+    mockGetFillerDictionary
+      .mockImplementationOnce(() => new Promise((res) => { resolvePending = res; }))
+      .mockImplementationOnce(() => new Promise((_, rej) => { rejectPending = rej; }));
+
+    const view1 = render(
+      <MemoryRouter initialEntries={['/practice']}>
+        <LanguageProvider>
+          <PracticePage />
+        </LanguageProvider>
+      </MemoryRouter>
+    );
+    view1.unmount();
+    await act(async () => {
+      resolvePending(['arrayWord']);
+    });
+
+    const view2 = render(
+      <MemoryRouter initialEntries={['/practice']}>
+        <LanguageProvider>
+          <PracticePage />
+        </LanguageProvider>
+      </MemoryRouter>
+    );
+    view2.unmount();
+    await act(async () => {
+      rejectPending(new Error('late reject'));
+    });
+
+    mockGetFillerDictionary.mockResolvedValueOnce(['arrayWord']);
+    render(
+      <MemoryRouter initialEntries={['/practice']}>
+        <LanguageProvider>
+          <PracticePage />
+        </LanguageProvider>
+      </MemoryRouter>
+    );
+    await waitFor(() => expect(screen.getByText('arrayword')).toBeInTheDocument());
   });
 });

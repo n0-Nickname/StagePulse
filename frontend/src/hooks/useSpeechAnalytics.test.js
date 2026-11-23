@@ -75,27 +75,37 @@ describe('speech analytics helpers', () => {
     });
   });
 
-  it('computes overall WPM with 5-second warmup threshold and bilingual fillers', () => {
+  it('computes overall WPM with 5-second warmup threshold and Pro-only custom filler matching', () => {
     expect(computeOverallWpm(10, 4)).toBe(0);
     expect(computeOverallWpm(0, 10)).toBe(0);
     expect(computeOverallWpm(15, 6)).toBe(150);
 
-    expect(analyzeFillers('', 'en-US')).toEqual({ fillerCount: 0, fillerBreakdown: {} });
-    expect(analyzeFillers('So basically like um hello', 'en-US')).toEqual({
-      fillerCount: 4,
-      fillerBreakdown: { so: 1, basically: 1, like: 1, um: 1 },
+    expect(analyzeFillers('', ['like'], true)).toEqual({ fillerCount: 0, fillerBreakdown: {} });
+    // Non-PRO returns 0 matches even with words provided
+    expect(analyzeFillers('So basically like um ну типу', ['like', 'um', 'ну'], false)).toEqual({
+      fillerCount: 0,
+      fillerBreakdown: {},
     });
-    expect(analyzeFillers('Ну типу короче блін як би власне значить от', 'uk-UA')).toEqual({
-      fillerCount: 8,
+    // PRO with empty dictionary returns 0 matches (no hardcoded fillers)
+    expect(analyzeFillers('So basically like um ну типу', [], true)).toEqual({
+      fillerCount: 0,
+      fillerBreakdown: {},
+    });
+    // PRO scans strictly against custom dictionary (single words & multi-word phrases in en/uk)
+    expect(
+      analyzeFillers('So basically like um hello like-minded', ['like', 'um', 'basically'], true)
+    ).toEqual({
+      fillerCount: 3,
+      fillerBreakdown: { basically: 1, like: 1, um: 1 },
+    });
+    expect(
+      analyzeFillers('Ну типу, як би, подібний приклад і як так', ['ну', 'як би', 'як', 'діб'], true)
+    ).toEqual({
+      fillerCount: 3,
       fillerBreakdown: {
         ну: 1,
-        типу: 1,
-        короче: 1,
-        блін: 1,
         'як би': 1,
-        власне: 1,
-        значить: 1,
-        от: 1,
+        як: 1,
       },
     });
   });
@@ -158,9 +168,14 @@ describe('useSpeechAnalytics', () => {
     });
 
     const { result, rerender, unmount } = renderHook(
-      ({ running, elapsed, lang }) =>
-        useSpeechAnalytics(running, elapsed, lang, { engineFactory, micCaptureFactory }),
-      { initialProps: { running: true, elapsed: 6, lang: 'en-US' } }
+      ({ running, elapsed, lang, isPro = true, userFillerWords = ['like'] }) =>
+        useSpeechAnalytics(running, elapsed, lang, {
+          engineFactory,
+          micCaptureFactory,
+          isPro,
+          userFillerWords,
+        }),
+      { initialProps: { running: true, elapsed: 6, lang: 'en-US', isPro: true, userFillerWords: ['like'] } }
     );
 
     await waitFor(() => expect(captureCallbacks).not.toBeNull());
@@ -194,6 +209,19 @@ describe('useSpeechAnalytics', () => {
     expect(result.current.pauseCount).toBe(1);
     expect(result.current.isSilentPause).toBe(false);
     expect(result.current.totalPauseSec).toBe(1.8);
+
+    // Updating userFillerWords re-scans active transcript; !isPro clears filler stats
+    act(() => {
+      rerender({ running: true, elapsed: 6, lang: 'en-US', isPro: true, userFillerWords: ['like', 'world'] });
+    });
+    expect(result.current.fillerCount).toBe(2);
+    expect(result.current.fillerBreakdown).toEqual({ like: 1, world: 1 });
+
+    act(() => {
+      rerender({ running: true, elapsed: 6, lang: 'en-US', isPro: false, userFillerWords: ['like', 'world'] });
+    });
+    expect(result.current.fillerCount).toBe(0);
+    expect(result.current.fillerBreakdown).toEqual({});
 
     // Empty transcript payload resets words safely
     act(() => {
@@ -350,7 +378,11 @@ describe('useSpeechAnalytics', () => {
     });
 
     const { result, rerender, unmount } = renderHook(
-      ({ running, elapsed, lang }) => useSpeechAnalytics(running, elapsed, lang),
+      ({ running, elapsed, lang }) =>
+        useSpeechAnalytics(running, elapsed, lang, {
+          isPro: true,
+          userFillerWords: ['like', 'um', 'basically'],
+        }),
       { initialProps: { running: false, elapsed: 0, lang: 'en-US' } }
     );
 
@@ -451,7 +483,11 @@ describe('useSpeechAnalytics', () => {
     vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockRejectedValueOnce(undefined);
 
     const { result, rerender, unmount } = renderHook(
-      ({ running, elapsed, lang }) => useSpeechAnalytics(running, elapsed, lang),
+      ({ running, elapsed, lang }) =>
+        useSpeechAnalytics(running, elapsed, lang, {
+          isPro: true,
+          userFillerWords: ['ну', 'типу', 'власне'],
+        }),
       { initialProps: { running: true, elapsed: 15, lang: 'uk-UA' } }
     );
 

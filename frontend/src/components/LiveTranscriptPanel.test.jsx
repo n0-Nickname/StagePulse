@@ -34,6 +34,8 @@ describe('LiveTranscriptPanel', () => {
 
     act(() => {
       store.patch({
+        isPro: true,
+        userFillerWords: ['basically'],
         committedWords: words1500,
         committedBlocks: blocks,
         committedText: words1500.map((w) => w.text).join(' '),
@@ -168,5 +170,48 @@ describe('LiveTranscriptPanel', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /Copy|Copied/i }));
     });
+  });
+
+  it('produces zero transcript highlights when !isPro or when userFillerWords is empty', () => {
+    const store = createSpeechStore();
+    const words = [
+      { text: 'like', join: false },
+      { text: 'ну', join: false },
+      { text: 'basically', join: false },
+    ];
+    const blocks = buildCommittedBlocks(words, []);
+
+    act(() => {
+      store.patch({
+        isPro: false,
+        userFillerWords: ['like', 'ну'],
+        committedWords: words,
+        committedBlocks: blocks,
+        committedText: 'like ну basically',
+        fullText: 'like ну basically',
+      });
+    });
+
+    render(
+      <LanguageProvider>
+        <LiveTranscriptPanel title="Live transcript" store={store} />
+      </LanguageProvider>
+    );
+
+    expect(screen.getByTestId('committed-transcript-block').querySelectorAll('mark')).toHaveLength(0);
+
+    // PRO with empty dictionary -> still zero highlights
+    act(() => {
+      store.patch({ isPro: true, userFillerWords: [] });
+    });
+    expect(screen.getByTestId('committed-transcript-block').querySelectorAll('mark')).toHaveLength(0);
+
+    // PRO with custom dictionary -> highlights strictly custom words
+    act(() => {
+      store.patch({ isPro: true, userFillerWords: ['ну'] });
+    });
+    const marks = screen.getByTestId('committed-transcript-block').querySelectorAll('mark');
+    expect(marks).toHaveLength(1);
+    expect(marks[0].textContent).toBe('ну');
   });
 });

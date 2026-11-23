@@ -23,6 +23,7 @@ const baseSummary = {
   totalPauseSec: 3.4,
   fillerCount: 3,
   fillerBreakdown: { like: 2, um: 1 },
+  userFillerWords: ['like', 'um'],
   pacingTimeline: [
     { sec: 10, wpm: 0 },
     { sec: 20, wpm: 140 },
@@ -87,6 +88,9 @@ describe('SessionSummaryModal', () => {
     );
 
     expect(screen.getByText(/×2/)).toBeInTheDocument();
+    const transcriptMarks = document.querySelectorAll('mark');
+    expect(transcriptMarks).toHaveLength(2);
+    expect(transcriptMarks[0].textContent).toBe('like');
     const titleInput = screen.getByLabelText(/Presentation title/i);
     const notesInput = screen.getByLabelText(/Notes/i);
 
@@ -111,6 +115,7 @@ describe('SessionSummaryModal', () => {
             ...baseSummary,
             fillerCount: 0,
             fillerBreakdown: undefined,
+            userFillerWords: [],
             pacingTimeline: [],
             transcript: 'Ну це типу тест',
             score: undefined,

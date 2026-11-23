@@ -54,14 +54,13 @@ describe('SlotMachineModal', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it('triggers jackpot celebration, shake class, staggered 1.0/1.6/2.3s stops, and z-index 99999 confetti canvas', async () => {
+  it('triggers milestone celebration, shake class, staggered 1.0/1.6/2.3s stops, and z-index 99999 confetti canvas', async () => {
     slotsApi.spin.mockResolvedValue({
       reels: ['DIAMOND', 'DIAMOND', 'DIAMOND'],
-      is_jackpot: true,
       is_pro: true,
       spin_count: 1,
       spins_remaining: 0,
-      message: 'Jackpot!',
+      message: 'Milestone unlocked!',
     });
 
     const onClose = vi.fn();
@@ -76,7 +75,7 @@ describe('SlotMachineModal', () => {
     fireEvent.click(muteBtn);
     expect(screen.getByRole('button', { name: /Unmute sound/i })).toBeInTheDocument();
 
-    const spinBtn = screen.getByRole('button', { name: /Spin/i });
+    const spinBtn = screen.getByRole('button', { name: /Check Milestone/i });
     await act(async () => {
       fireEvent.click(spinBtn);
     });
@@ -86,19 +85,19 @@ describe('SlotMachineModal', () => {
       await vi.advanceTimersByTimeAsync(2500);
     });
 
-    // Spin a second time while confetti is running to hit existing confettiRafRef cancellation
+    // Re-check a second time while confetti is running to hit existing confettiRafRef cancellation
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Spin/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Check Milestone/i }));
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(7000);
     });
 
     const card = screen.getByTestId('slot-modal-card');
-    expect(card.className).toContain('jackpot-shake');
+    expect(card.className).toContain('milestone-shake');
 
     const banner = screen.getByTestId('slot-banner-message');
-    expect(banner).toHaveTextContent(/Jackpot/i);
+    expect(banner).toHaveTextContent(/Milestone Achieved/i);
 
     const canvas = screen.getByTestId('confetti-canvas');
     expect(canvas.style.zIndex).toBe('99999');
@@ -116,7 +115,7 @@ describe('SlotMachineModal', () => {
     );
   });
 
-  it('handles non-jackpot spin loss, unknown/missing reels, spins_remaining fallback, API error, and PRO state', async () => {
+  it('handles non-milestone spin, unknown/missing reels, spins_remaining fallback, API error, and PRO state', async () => {
     authState.user = {
       id: 1,
       email: 'tester@example.com',
@@ -126,13 +125,11 @@ describe('SlotMachineModal', () => {
     slotsApi.spin
       .mockResolvedValueOnce({
         reels: ['UNKNOWN_SYM', 'MIC', 'FIRE'],
-        is_jackpot: false,
         is_pro: false,
         spin_count: 2,
         spins_remaining: 1,
       })
       .mockResolvedValueOnce({
-        is_jackpot: false,
         is_pro: false,
         spin_count: 3,
         spins_remaining: 0,
@@ -146,9 +143,9 @@ describe('SlotMachineModal', () => {
       </LanguageProvider>
     );
 
-    // Non-jackpot spin with unknown symbol fallback
+    // Non-milestone spin with unknown symbol fallback
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Spin/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Check Milestone/i }));
     });
     // Escape while spinning does NOT close
     fireEvent.keyDown(window, { key: 'Escape' });
@@ -157,11 +154,11 @@ describe('SlotMachineModal', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2400);
     });
-    expect(screen.getByTestId('slot-banner-message')).toHaveTextContent(/Try another spin/i);
+    expect(screen.getByTestId('slot-banner-message')).toHaveTextContent(/Keep practicing/i);
 
     // Spin with undefined reels (falls back to DEFAULT_REELS)
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Spin/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Check Milestone/i }));
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2400);
@@ -169,22 +166,21 @@ describe('SlotMachineModal', () => {
 
     // API error spin
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Spin/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Check Milestone/i }));
     });
-    expect(screen.getByRole('alert')).toHaveTextContent(/No spins remaining/i);
+    expect(screen.getByRole('alert')).toHaveTextContent(/No milestone checks remaining/i);
 
-    // Jackpot when canvas getContext returns null skips confetti gracefully
+    // Milestone win when canvas getContext returns null skips confetti gracefully
     const origGetCtx = HTMLCanvasElement.prototype.getContext;
     HTMLCanvasElement.prototype.getContext = vi.fn(() => null);
     slotsApi.spin.mockResolvedValueOnce({
       reels: ['DIAMOND', 'DIAMOND', 'DIAMOND'],
-      is_jackpot: true,
       is_pro: true,
       spin_count: 1,
       spins_remaining: 0,
     });
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Spin/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Check Milestone/i }));
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2400);
@@ -195,7 +191,6 @@ describe('SlotMachineModal', () => {
     authState.user = { id: 1, email: 'fresh@example.com', is_pro: false };
     slotsApi.spin.mockResolvedValueOnce({
       reels: ['MIC', 'TIMER', 'FIRE'],
-      is_jackpot: false,
       is_pro: false,
       spin_count: 1,
       spins_remaining: 2,
@@ -206,7 +201,7 @@ describe('SlotMachineModal', () => {
       </LanguageProvider>
     );
     await act(async () => {
-      fireEvent.click(screen.getAllByRole('button', { name: /Spin/i })[1]);
+      fireEvent.click(screen.getAllByRole('button', { name: /Check Milestone/i })[1]);
     });
     unmount();
 

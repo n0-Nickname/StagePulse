@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { calculatePresentationScore, generateProfessorVerdict } from './roastGenerator.js';
-import { unlockAudio, playReelTick, playReelLock, playJackpotWin } from './slotSounds.js';
+import { unlockAudio, playReelTick, playReelLock, playMilestoneWin } from './slotSounds.js';
 
 describe('roastGenerator', () => {
   it('calculates presentation scores across optimal, edge, and poor ranges', () => {
@@ -89,11 +89,11 @@ describe('slotSounds', () => {
     vi.restoreAllMocks();
   });
 
-  it('unlocks AudioContext, plays tick/lock/jackpot, and skips when muted', async () => {
+  it('unlocks AudioContext, plays tick/lock/milestone, and skips when muted', async () => {
     // Muted paths return early
     playReelTick(true);
     playReelLock(0, true);
-    playJackpotWin(true);
+    playMilestoneWin(true);
 
     const ctx = unlockAudio();
     expect(ctx).toBeTruthy();
@@ -104,7 +104,7 @@ describe('slotSounds', () => {
     playReelTick(false);
     playReelLock(0, false);
     playReelLock(99, false);
-    playJackpotWin(false);
+    playMilestoneWin(false);
 
     // Test fresh import with AudioContext unavailable
     const origAC = window.AudioContext;
@@ -116,7 +116,7 @@ describe('slotSounds', () => {
     expect(freshSounds.unlockAudio()).toBeNull();
     freshSounds.playReelTick(false);
     freshSounds.playReelLock(0, false);
-    freshSounds.playJackpotWin(false);
+    freshSounds.playMilestoneWin(false);
     window.AudioContext = origAC;
     window.webkitAudioContext = origWac;
   });

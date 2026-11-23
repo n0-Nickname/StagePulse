@@ -44,7 +44,7 @@ describe('LandingPage', () => {
 
     expect(screen.getByText(/Timestamp-Accurate Pause Detection/i)).toBeInTheDocument();
     expect(screen.getByText(/Filler Word & Pacing Analysis/i)).toBeInTheDocument();
-    expect(screen.getByText(/Gacha PRO Slot Unlock/i)).toBeInTheDocument();
+    expect(screen.getByText(/PRO Pace Mastery Milestones/i)).toBeInTheDocument();
 
     const startCta = screen.getByRole('link', { name: /Start Practicing/i });
     expect(startCta).toHaveAttribute('href', '/auth?mode=register');
