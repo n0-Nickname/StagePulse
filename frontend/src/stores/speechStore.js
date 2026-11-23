@@ -85,6 +85,64 @@ export function computePartialText(words = [], fullText = '') {
   return { committedText, partialText: '' };
 }
 
+export function normalizeFillerWords(words) {
+  if (!Array.isArray(words)) return EMPTY_ARRAY;
+  const seen = new Set();
+  const out = [];
+  for (let i = 0; i < words.length; i += 1) {
+    const item =
+      typeof words[i] === 'string'
+        ? words[i].trim().replace(/\s+/g, ' ').toLowerCase()
+        : '';
+    if (item && !seen.has(item)) {
+      seen.add(item);
+      out.push(item);
+    }
+  }
+  return out.length === 0 ? EMPTY_ARRAY : out;
+}
+
+export function buildFillerRegex(userFillerWords = []) {
+  const normalized = normalizeFillerWords(userFillerWords);
+  if (normalized.length === 0) {
+    return { regex: null, dictSet: new Set() };
+  }
+  const sorted = [...normalized].sort((a, b) => b.length - a.length);
+  const escaped = sorted.map((phrase) =>
+    phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+')
+  );
+  return {
+    regex: new RegExp(`(^|[^\\p{L}\\p{N}_-])(${escaped.join('|')})(?=$|[^\\p{L}\\p{N}_-])`, 'giu'),
+    dictSet: new Set(normalized),
+  };
+}
+
+export function segmentTextByFillers(text, userFillerWords = [], isPro = false) {
+  if (!text) return [];
+  if (!isPro) return [{ text, isFiller: false }];
+  const { regex } = buildFillerRegex(userFillerWords);
+  if (!regex) return [{ text, isFiller: false }];
+
+  const out = [];
+  let lastIndex = 0;
+  let match = regex.exec(text);
+  while (match !== null) {
+    const prefix = match[1];
+    const filler = match[2];
+    const matchStart = match.index + prefix.length;
+    if (matchStart > lastIndex) {
+      out.push({ text: text.slice(lastIndex, matchStart), isFiller: false });
+    }
+    out.push({ text: filler, isFiller: true });
+    lastIndex = matchStart + filler.length;
+    match = regex.exec(text);
+  }
+  if (lastIndex < text.length) {
+    out.push({ text: text.slice(lastIndex), isFiller: false });
+  }
+  return out;
+}
+
 function shallowEqual(a, b) {
   const keys = Object.keys(a);
   for (let i = 0; i < keys.length; i += 1) {
@@ -106,6 +164,8 @@ function createInitialRawState() {
     isSpeaking: false,
     totalPauseSec: 0,
     currentSilenceSec: 0,
+    isPro: false,
+    userFillerWords: EMPTY_ARRAY,
     fillerCount: 0,
     fillerBreakdown: EMPTY_OBJECT,
     committedWords: EMPTY_ARRAY,
@@ -140,6 +200,8 @@ function buildSnapshot(raw, prevSnap) {
     currentSilenceSec: raw.currentSilenceSec,
   };
   const fillerCandidate = {
+    isPro: Boolean(raw.isPro),
+    userFillerWords: raw.userFillerWords,
     fillerCount: raw.fillerCount,
     fillerWords: raw.fillerBreakdown,
     fillerBreakdown: raw.fillerBreakdown,
@@ -218,6 +280,15 @@ export function createSpeechStore() {
   const patch = (partial) => {
     if (!partial || typeof partial !== 'object') return;
     const nextRaw = { ...rawState, ...partial };
+    if (!nextRaw.isPro) {
+      nextRaw.fillerCount = 0;
+      nextRaw.fillerBreakdown = EMPTY_OBJECT;
+    } else if (
+      nextRaw.fillerCount === 0 &&
+      Object.keys(nextRaw.fillerBreakdown).length === 0
+    ) {
+      nextRaw.fillerBreakdown = EMPTY_OBJECT;
+    }
     if (shallowEqual(rawState, nextRaw)) return;
     rawState = nextRaw;
     snapshot = buildSnapshot(rawState, snapshot);

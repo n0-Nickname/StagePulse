@@ -8,6 +8,8 @@ import {
   buildCommittedBlocks,
   computePartialText,
   detectWasmMode,
+  normalizeFillerWords,
+  buildFillerRegex,
 } from '../stores/speechStore.js';
 
 const logger = createLogger('ASR:Analytics');
@@ -25,11 +27,6 @@ const ROLLING_WPM_WINDOW_SEC = 15;
 const CACHE_NAME = 'tinyasr-models-v1';
 const MODEL_CACHE_KEYS = ['/models/en-ru-uk.tzf.gz', '/models/silero_vad.onnx.gz'];
 const INITIAL_BARS = Object.freeze(new Array(BAR_COUNT).fill(0.05));
-
-export const BILINGUAL_FILLER_WORDS = {
-  uk: ['ну', 'типу', 'короче', 'блін', 'як би', 'власне', 'значить', 'от'],
-  en: ['like', 'um', 'uh', 'basically', 'actually', 'literally', 'you know', 'so'],
-};
 
 export function normalizeWordTimestamps(words = []) {
   return words.map((w) => ({
@@ -196,23 +193,23 @@ async function verifyModelCache() {
   }
 }
 
-export function analyzeFillers(text, speechLang = 'uk-UA') {
-  if (!text) {
+export function analyzeFillers(text, userFillerWords = [], isPro = false) {
+  if (!text || !isPro) {
     return { fillerCount: 0, fillerBreakdown: {} };
   }
-  const langKey = speechLang.startsWith('uk') ? 'uk' : 'en';
-  const dict = BILINGUAL_FILLER_WORDS[langKey];
+  const { regex } = buildFillerRegex(userFillerWords);
+  if (!regex) {
+    return { fillerCount: 0, fillerBreakdown: {} };
+  }
+
   const counts = {};
   let total = 0;
-
-  for (const phrase of dict) {
-    const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const regex = new RegExp(`(^|[^\\p{L}\\p{N}_])(${escaped})(?=$|[^\\p{L}\\p{N}_])`, 'giu');
-    const matches = text.match(regex);
-    if (matches && matches.length > 0) {
-      counts[phrase] = matches.length;
-      total += matches.length;
-    }
+  let match = regex.exec(text);
+  while (match !== null) {
+    const key = match[2].toLowerCase().replace(/\s+/g, ' ');
+    counts[key] = (counts[key] || 0) + 1;
+    total += 1;
+    match = regex.exec(text);
   }
 
   return { fillerCount: total, fillerBreakdown: counts };
@@ -239,12 +236,28 @@ export function useSpeechAnalytics(
   speechLang = 'uk-UA',
   options = {}
 ) {
-  const { engineFactory, micCaptureFactory = startMicCapture, store: externalStore, reactive = true } =
-    options;
+  const {
+    engineFactory,
+    micCaptureFactory = startMicCapture,
+    store: externalStore,
+    reactive = true,
+    isPro = false,
+    userFillerWords = [],
+  } = options;
+
+  const fillerWordsKey = Array.isArray(userFillerWords) ? userFillerWords.join('\u0001') : '';
+  const normalizedFillerWords = useMemo(
+    () => normalizeFillerWords(userFillerWords),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [fillerWordsKey]
+  );
 
   const store = useMemo(() => externalStore ?? createSpeechStore(), [externalStore]);
   const noopStore = useMemo(() => createSpeechStore(), []);
   const snapshot = useSpeechSnapshot(reactive ? store : noopStore);
+
+  const isProRef = useRef(Boolean(isPro));
+  const userFillerWordsRef = useRef(normalizedFillerWords);
 
   const [silenceThreshold, setSilenceThreshold] = useState(DEFAULT_SILENCE_THRESHOLD);
   const [isSimulatedMic, setIsSimulatedMic] = useState(false);
@@ -410,17 +423,28 @@ export function useSpeechAnalytics(
 
   useEffect(() => {
     speechLangRef.current = speechLang;
-    const { fillerCount, fillerBreakdown } = analyzeFillers(
-      liveTranscriptRef.current,
-      speechLang
-    );
     store.patch({
       activeLang: speechLang,
       wasmMode: detectWasmMode(),
+    });
+  }, [speechLang, store]);
+
+  useEffect(() => {
+    const nextIsPro = Boolean(isPro);
+    isProRef.current = nextIsPro;
+    userFillerWordsRef.current = normalizedFillerWords;
+    const { fillerCount, fillerBreakdown } = analyzeFillers(
+      liveTranscriptRef.current,
+      normalizedFillerWords,
+      nextIsPro
+    );
+    store.patch({
+      isPro: nextIsPro,
+      userFillerWords: normalizedFillerWords,
       fillerCount,
       fillerBreakdown,
     });
-  }, [speechLang, store]);
+  }, [isPro, normalizedFillerWords, store]);
 
   useEffect(() => {
     engineFactoryRef.current = engineFactory;
@@ -607,7 +631,11 @@ export function useSpeechAnalytics(
           loggedGapCountRef.current = committed.gaps.length;
         }
 
-        const { fillerCount, fillerBreakdown } = analyzeFillers(fullText, speechLangRef.current);
+        const { fillerCount, fillerBreakdown } = analyzeFillers(
+          fullText,
+          userFillerWordsRef.current,
+          isProRef.current
+        );
 
         store.patch({
           committedWords: safeWords,
@@ -723,7 +751,11 @@ export function useSpeechAnalytics(
         if (recentText) {
           const clipped = recentText.slice(-90);
           liveTranscriptRef.current = clipped;
-          const { fillerCount, fillerBreakdown } = analyzeFillers(clipped, speechLangRef.current);
+          const { fillerCount, fillerBreakdown } = analyzeFillers(
+            clipped,
+            userFillerWordsRef.current,
+            isProRef.current
+          );
           store.patch({
             partialText: clipped,
             fullText: clipped,
@@ -1222,6 +1254,8 @@ export function useSpeechAnalytics(
     const currentProgress = store.getState().modelProgress;
     store.reset();
     store.patch({
+      isPro: isProRef.current,
+      userFillerWords: userFillerWordsRef.current,
       activeLang: speechLangRef.current,
       wasmMode: detectWasmMode(),
       estimationMethod: nextMethod,

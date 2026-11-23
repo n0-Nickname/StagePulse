@@ -1,8 +1,3 @@
-export const FILLER_WORDS = {
-  uk: ['ну', 'типу', 'короче', 'блін', 'як би', 'власне', 'значить', 'от', 'так би мовити'],
-  en: ['like', 'um', 'uh', 'basically', 'actually', 'literally', 'you know', 'so', 'right'],
-};
-
 export function calculatePresentationScore({
   targetDurationSec = 180,
   actualDurationSec = 0,
