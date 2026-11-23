@@ -1,12 +1,22 @@
 import React, { lazy, Suspense, useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Cpu, AlertCircle } from 'lucide-react';
+import { Cpu, AlertCircle, Lock, Plus, Sparkles, Tag, X } from 'lucide-react';
 import { useTimer } from '../hooks/useTimer.js';
 import { useSpeechAnalytics } from '../hooks/useSpeechAnalytics.js';
 import { useTranslation } from '../context/LanguageContext.jsx';
-import { presentationsApi, formatApiError } from '../api/client.js';
+import { useAuth } from '../context/AuthContext.jsx';
+import {
+  presentationsApi,
+  getFillerDictionary,
+  updateFillerDictionary,
+  formatApiError,
+} from '../api/client.js';
 import { calculatePresentationScore, generateProfessorVerdict } from '../utils/roastGenerator.js';
-import { speechStore, useSessionStatus } from '../stores/speechStore.js';
+import {
+  speechStore,
+  useSessionStatus,
+  normalizeFillerWords,
+} from '../stores/speechStore.js';
 import TimerControls from '../components/TimerControls.jsx';
 import AudioVisualizer from '../components/AudioVisualizer.jsx';
 import LiveMetricsBar from '../components/LiveMetricsBar.jsx';
@@ -17,11 +27,40 @@ const SessionSummaryModal = lazy(() => import('../components/SessionSummaryModal
 export default function PracticePage() {
   const navigate = useNavigate();
   const { lang, t } = useTranslation();
+  const { user, openSlotModal } = useAuth();
+  const isPro = Boolean(user?.is_pro);
   const [speechLang, setSpeechLang] = useState(() => (lang === 'uk' ? 'uk-UA' : 'en-US'));
+  const [userFillerWords, setUserFillerWords] = useState([]);
+  const [fillerInput, setFillerInput] = useState('');
+  const [dictError, setDictError] = useState(null);
+  const [isSyncingDict, setIsSyncingDict] = useState(false);
 
   useEffect(() => {
     setSpeechLang(lang === 'uk' ? 'uk-UA' : 'en-US');
   }, [lang]);
+
+  useEffect(() => {
+    if (!isPro) {
+      setUserFillerWords([]);
+      setDictError(null);
+      return undefined;
+    }
+    let cancelled = false;
+    getFillerDictionary()
+      .then((res) => {
+        if (cancelled) return;
+        const rawWords = Array.isArray(res) ? res : res?.words;
+        setUserFillerWords(normalizeFillerWords(rawWords));
+        setDictError(null);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setDictError(formatApiError(err, t));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isPro, t]);
 
   useEffect(() => {
     return () => {
@@ -33,6 +72,8 @@ export default function PracticePage() {
   const analytics = useSpeechAnalytics(timer.isRunning, timer.elapsedSec, speechLang, {
     store: speechStore,
     reactive: false,
+    isPro,
+    userFillerWords,
   });
   const sessionStatus = useSessionStatus(speechStore);
 
@@ -77,6 +118,7 @@ export default function PracticePage() {
       estimationMethod: snap.estimationMethod,
       fillerCount: snap.fillerCount,
       fillerBreakdown: snap.fillerBreakdown,
+      userFillerWords: snap.userFillerWords,
       pacingTimeline: snap.pacingTimeline,
       transcript: snap.fullText,
       score,
@@ -95,6 +137,44 @@ export default function PracticePage() {
   const handleCloseSummary = useCallback(() => {
     setSummaryOpen(false);
   }, []);
+
+  const syncFillerWords = useCallback(
+    async (nextWords, prevWords) => {
+      setUserFillerWords(nextWords);
+      setDictError(null);
+      setIsSyncingDict(true);
+      try {
+        await updateFillerDictionary(nextWords);
+      } catch (err) {
+        setUserFillerWords(prevWords);
+        setDictError(formatApiError(err, t));
+      } finally {
+        setIsSyncingDict(false);
+      }
+    },
+    [t]
+  );
+
+  const handleAddFillerWord = useCallback(
+    async (e) => {
+      e.preventDefault();
+      const [normalized] = normalizeFillerWords([fillerInput]);
+      setFillerInput('');
+      if (!normalized || userFillerWords.includes(normalized)) {
+        return;
+      }
+      await syncFillerWords([...userFillerWords, normalized], userFillerWords);
+    },
+    [fillerInput, syncFillerWords, userFillerWords]
+  );
+
+  const handleRemoveFillerWord = useCallback(
+    async (wordToRemove) => {
+      const nextWords = userFillerWords.filter((w) => w !== wordToRemove);
+      await syncFillerWords(nextWords, userFillerWords);
+    },
+    [syncFillerWords, userFillerWords]
+  );
 
   const handleSaveSession = useCallback(
     async ({ title }) => {
@@ -252,11 +332,103 @@ export default function PracticePage() {
         store={speechStore}
       />
 
-      <LiveMetricsBar store={speechStore} />
+      <LiveMetricsBar store={speechStore} onUnlockClick={openSlotModal} />
+
+      {/* PRO — Custom Filler Dictionary Manager */}
+      <section className="obsidian-glass rounded-2xl p-4 sm:p-5 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Tag className="h-4 w-4 text-[#8B5CF6]" />
+            <h2 className="text-sm font-semibold text-[#F4F5F7]">
+              {t('practice.fillerDictTitle')}
+            </h2>
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-[#F59E0B]/15 border border-[#F59E0B]/40 text-[#FDE68A]">
+              {t('nav.proBadge')}
+            </span>
+          </div>
+          {isPro && (
+            <span className="text-xs text-[#9CA3AF]">{t('practice.fillerDictDesc')}</span>
+          )}
+        </div>
+
+        {!isPro ? (
+          <div
+            data-testid="filler-dict-locked"
+            className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-xl obsidian-inset p-3.5"
+          >
+            <div className="flex items-center gap-2.5 text-xs text-[#9CA3AF]">
+              <Lock className="h-4 w-4 shrink-0 text-[#F59E0B]" />
+              <span>{t('practice.fillerDictLockedDesc')}</span>
+            </div>
+            <button
+              type="button"
+              onClick={openSlotModal}
+              className="crimson-glow-btn inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold shrink-0 cursor-pointer"
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              {t('practice.upgradePro')}
+            </button>
+          </div>
+        ) : (
+          <div data-testid="filler-dict-manager" className="space-y-3">
+            <form onSubmit={handleAddFillerWord} className="flex flex-col sm:flex-row gap-2">
+              <input
+                type="text"
+                aria-label={t('practice.fillerDictInputLabel')}
+                value={fillerInput}
+                onChange={(e) => setFillerInput(e.target.value)}
+                placeholder={t('practice.fillerDictPlaceholder')}
+                className="flex-1 rounded-xl obsidian-inset px-3.5 py-2 text-sm text-[#F4F5F7] placeholder-[#6B7280] focus:outline-none focus:border-[#8B5CF6]"
+              />
+              <button
+                type="submit"
+                disabled={isSyncingDict}
+                className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-[#8B5CF6]/20 border border-[#8B5CF6]/45 text-[#C4B5FD] hover:bg-[#8B5CF6]/30 disabled:opacity-50 transition-colors cursor-pointer"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                {t('practice.fillerDictAdd')}
+              </button>
+            </form>
+
+            {dictError && (
+              <div
+                role="alert"
+                className="flex items-center gap-2 rounded-xl bg-[#FF6363]/12 border border-[#FF6363]/50 px-3.5 py-2 text-xs font-medium text-[#FCA5A5]"
+              >
+                <AlertCircle className="h-4 w-4 shrink-0 text-[#FF6363]" />
+                <span>{dictError}</span>
+              </div>
+            )}
+
+            {userFillerWords.length === 0 ? (
+              <p className="text-xs text-[#9CA3AF]">{t('practice.fillerDictEmpty')}</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {userFillerWords.map((word) => (
+                  <span
+                    key={word}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-[#121317] border border-white/[0.1] text-[#F4F5F7]"
+                  >
+                    <span>{word}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveFillerWord(word)}
+                      disabled={isSyncingDict}
+                      aria-label={`${t('practice.fillerDictRemove')} ${word}`}
+                      className="text-[#9CA3AF] hover:text-[#FF6363] disabled:opacity-50 transition-colors cursor-pointer"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </section>
 
       <LiveTranscriptPanel
         title={t('practice.liveTranscript')}
-        speechLang={speechLang}
         store={speechStore}
       />
 

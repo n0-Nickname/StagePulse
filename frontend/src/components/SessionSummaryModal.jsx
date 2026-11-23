@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Sparkles, AlertCircle } from 'lucide-react';
 import { useTranslation } from '../context/LanguageContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
-import { FILLER_WORDS } from '../utils/roastGenerator.js';
+import { segmentTextByFillers } from '../stores/speechStore.js';
 
 function formatDuration(seconds) {
   const s = Math.max(0, Math.round(seconds || 0));
@@ -74,28 +74,24 @@ function PacingCurveChart({ timeline = [], emptyLabel }) {
   );
 }
 
-function AnnotatedTranscript({ transcript, lang = 'en' }) {
-  const dict = FILLER_WORDS[lang === 'uk' ? 'uk' : 'en'];
-  const parts = useMemo(() => {
-    const escaped = dict.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-    const regex = new RegExp(`(${escaped.join('|')})`, 'giu');
-    return transcript.split(regex);
-  }, [transcript, dict]);
-
-  const dictSet = new Set(dict.map((w) => w.toLowerCase()));
+function AnnotatedTranscript({ transcript, userFillerWords = [], isPro = false }) {
+  const segments = useMemo(
+    () => segmentTextByFillers(transcript, userFillerWords, isPro),
+    [transcript, userFillerWords, isPro]
+  );
 
   return (
     <p className="text-xs text-[#F4F5F7] leading-relaxed obsidian-inset rounded-xl p-3 max-h-28 overflow-y-auto">
-      {parts.map((part, idx) =>
-        dictSet.has(part.toLowerCase()) ? (
+      {segments.map((seg, idx) =>
+        seg.isFiller ? (
           <mark
             key={idx}
             className="bg-[#FF6363]/25 text-[#FCA5A5] px-1 rounded font-medium"
           >
-            {part}
+            {seg.text}
           </mark>
         ) : (
-          <span key={idx}>{part}</span>
+          <span key={idx}>{seg.text}</span>
         )
       )}
     </p>
@@ -110,7 +106,7 @@ export default function SessionSummaryModal({
   isSaving = false,
   saveError = null,
 }) {
-  const { lang, t } = useTranslation();
+  const { t } = useTranslation();
   const { user, openSlotModal } = useAuth();
   const isPro = Boolean(user?.is_pro);
 
@@ -266,7 +262,11 @@ export default function SessionSummaryModal({
                   <div className="text-xs font-medium text-[#9CA3AF] mb-2">
                     {t('summary.annotatedTranscriptTitle')}
                   </div>
-                  <AnnotatedTranscript transcript={summary.transcript} lang={lang} />
+                  <AnnotatedTranscript
+                    transcript={summary.transcript}
+                    userFillerWords={summary.userFillerWords || []}
+                    isPro={isPro}
+                  />
                 </div>
               )}
             </div>

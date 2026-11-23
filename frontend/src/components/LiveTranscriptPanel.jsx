@@ -1,53 +1,24 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Copy, Check, Download, ArrowDown } from 'lucide-react';
 import { useTranslation } from '../context/LanguageContext.jsx';
-import { BILINGUAL_FILLER_WORDS } from '../hooks/useSpeechAnalytics.js';
 import {
   speechStore,
   useTranscriptCommitted,
   useTranscriptTail,
+  useFillerMetrics,
+  segmentTextByFillers,
 } from '../stores/speechStore.js';
-
-function buildFillerRegex(speechLang = 'uk-UA') {
-  const langKey = speechLang.startsWith('uk') ? 'uk' : 'en';
-  const dict = BILINGUAL_FILLER_WORDS[langKey];
-  const escaped = dict.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  return {
-    regex: new RegExp(`(^|[^\\p{L}\\p{N}_])(${escaped.join('|')})(?=$|[^\\p{L}\\p{N}_])`, 'giu'),
-    dictSet: new Set(dict.map((w) => w.toLowerCase())),
-  };
-}
 
 const CommittedTranscriptBlock = memo(function CommittedTranscriptBlock({
   block,
-  speechLang,
+  isPro,
+  userFillerWords,
   deferOffscreen,
 }) {
-  const segments = useMemo(() => {
-    const text = block.text;
-    const { regex, dictSet } = buildFillerRegex(speechLang);
-    const out = [];
-    let lastIndex = 0;
-    let match = regex.exec(text);
-    while (match !== null) {
-      const prefix = match[1] || '';
-      const filler = match[2] || '';
-      const matchStart = match.index + prefix.length;
-      if (matchStart > lastIndex) {
-        out.push({ text: text.slice(lastIndex, matchStart), isFiller: false });
-      }
-      out.push({
-        text: filler,
-        isFiller: dictSet.has(filler.toLowerCase()),
-      });
-      lastIndex = matchStart + filler.length;
-      match = regex.exec(text);
-    }
-    if (lastIndex < text.length) {
-      out.push({ text: text.slice(lastIndex), isFiller: false });
-    }
-    return out;
-  }, [block, speechLang]);
+  const segments = useMemo(
+    () => segmentTextByFillers(block.text, userFillerWords, isPro),
+    [block.text, userFillerWords, isPro]
+  );
 
   return (
     <span
@@ -101,11 +72,16 @@ const LiveTranscriptTail = memo(function LiveTranscriptTail({
 function LiveTranscriptPanel({
   title,
   transcript: transcriptProp,
-  speechLang = 'uk-UA',
+  isPro: isProProp,
+  userFillerWords: userFillerWordsProp,
   store = speechStore,
 }) {
   const { t } = useTranslation();
   const { committedBlocks, committedText } = useTranscriptCommitted(store);
+  const fillerMetrics = useFillerMetrics(store);
+  const isPro = isProProp !== undefined ? isProProp : fillerMetrics.isPro;
+  const userFillerWords =
+    userFillerWordsProp !== undefined ? userFillerWordsProp : fillerMetrics.userFillerWords;
   const scrollContainerRef = useRef(null);
   const isUserScrolledUpRef = useRef(false);
   const [showJumpBtn, setShowJumpBtn] = useState(false);
@@ -222,7 +198,8 @@ function LiveTranscriptPanel({
               <CommittedTranscriptBlock
                 key={block.id}
                 block={block}
-                speechLang={speechLang}
+                isPro={isPro}
+                userFillerWords={userFillerWords}
                 deferOffscreen={idx < committedBlocks.length - 1}
               />
             ))}

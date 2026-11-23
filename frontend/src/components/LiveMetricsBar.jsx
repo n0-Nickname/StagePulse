@@ -1,4 +1,5 @@
 import React, { memo } from 'react';
+import { Lock } from 'lucide-react';
 import { useTranslation } from '../context/LanguageContext.jsx';
 import {
   speechStore,
@@ -16,6 +17,8 @@ function LiveMetricsBar({
   pauseCount: pauseCountProp,
   totalPauseSec: totalPauseSecProp,
   fillerCount: fillerCountProp,
+  isPro: isProProp,
+  onUnlockClick,
   isSilentPause: isSilentPauseProp,
   currentSilenceSec: currentSilenceSecProp,
   estimationMethod: estimationMethodProp,
@@ -40,6 +43,8 @@ function LiveMetricsBar({
     currentSilenceSecProp !== undefined ? currentSilenceSecProp : pauseSlice.currentSilenceSec;
   const fillerCount =
     fillerCountProp !== undefined ? fillerCountProp : fillerSlice.fillerCount;
+  const isPro =
+    isProProp !== undefined ? isProProp : fillerCountProp !== undefined ? true : fillerSlice.isPro;
   const estimationMethod =
     estimationMethodProp !== undefined ? estimationMethodProp : statusSlice.estimationMethod;
 
@@ -126,17 +131,37 @@ function LiveMetricsBar({
       </div>
 
       <div className="p-3.5 sm:p-4 flex flex-col justify-between gap-2">
-        <span className="text-xs text-[#9CA3AF]">{t('metrics.fillers')}</span>
-        <div className="flex items-baseline gap-2">
-          <span
-            data-testid="live-filler-count"
-            className={`text-2xl sm:text-3xl font-bold font-mono tabular-nums tracking-tight ${
-              fillerCount > 0 ? 'text-[#FF6363]' : 'text-[#10B981]'
-            }`}
-          >
-            {fillerCount}
-          </span>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs text-[#9CA3AF]">{t('metrics.fillers')}</span>
+          {!isPro && (
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-[#F59E0B]/15 border border-[#F59E0B]/40 text-[#FDE68A]">
+              {t('nav.proBadge')}
+            </span>
+          )}
         </div>
+        {isPro ? (
+          <div className="flex items-baseline gap-2">
+            <span
+              data-testid="live-filler-count"
+              className={`text-2xl sm:text-3xl font-bold font-mono tabular-nums tracking-tight ${
+                fillerCount > 0 ? 'text-[#FF6363]' : 'text-[#10B981]'
+              }`}
+            >
+              {fillerCount}
+            </span>
+          </div>
+        ) : (
+          <div data-testid="live-filler-locked" className="flex items-center gap-2">
+            <Lock className="h-4 w-4 text-[#F59E0B] shrink-0" />
+            <button
+              type="button"
+              onClick={onUnlockClick}
+              className="text-xs font-semibold text-[#FDE68A] hover:text-white underline underline-offset-2 cursor-pointer text-left"
+            >
+              {t('practice.upgradePro')}
+            </button>
+          </div>
+        )}
       </div>
 
       <div
