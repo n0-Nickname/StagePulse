@@ -11,6 +11,11 @@ const SPEECH_BURST_DIP_FACTOR = 1.22;
 const SPEECH_BURST_PEAK_FACTOR = 1.95;
 const SYLLABLE_COOLDOWN_MS = 140;
 const BAR_COUNT = 24;
+const TRANSCRIPT_THROTTLE_MS = 135;
+const RMS_STATE_THROTTLE_MS = 1000;
+const ROLLING_WPM_WINDOW_SEC = 15;
+const CACHE_NAME = 'tinyasr-models-v1';
+const MODEL_CACHE_KEYS = ['/models/en-ru-uk.tzf.gz', '/models/silero_vad.onnx.gz'];
 
 export const BILINGUAL_FILLER_WORDS = {
   uk: ['ну', 'типу', 'короче', 'блін', 'як би', 'власне', 'значить', 'от'],
@@ -69,9 +74,67 @@ export function computeWordTimestampPauses(
   };
 }
 
+export function countNormalizedWords(text) {
+  if (!text || typeof text !== 'string') return 0;
+  const trimmed = text.trim();
+  if (!trimmed) return 0;
+  return trimmed
+    .split(/[\s—–-]+/)
+    .map((w) => w.replace(/^[^\p{L}\p{N}'’]+|[^\p{L}\p{N}'’]+$/gu, ''))
+    .filter(Boolean).length;
+}
+
 export function computeOverallWpm(wordCount, elapsedSec) {
   if (elapsedSec < 5 || wordCount <= 0) return 0;
   return Math.round(wordCount / (elapsedSec / 60));
+}
+
+export function computeRollingWpm(
+  wordSamples = [],
+  currentElapsedSec = 0,
+  firstSpeechSec = 0,
+  windowSec = ROLLING_WPM_WINDOW_SEC
+) {
+  if (!Array.isArray(wordSamples) || wordSamples.length === 0) return 0;
+  const effectiveStart = Math.max(firstSpeechSec, currentElapsedSec - windowSec);
+  const durationSec = currentElapsedSec - effectiveStart;
+  if (durationSec < 3) return 0;
+
+  const latestWords = wordSamples[wordSamples.length - 1].words;
+  let baselineWords = 0;
+  if (effectiveStart > firstSpeechSec) {
+    for (let i = 0; i < wordSamples.length; i += 1) {
+      if (wordSamples[i].t <= effectiveStart) {
+        baselineWords = wordSamples[i].words;
+      } else {
+        break;
+      }
+    }
+  }
+  const deltaWords = Math.max(0, latestWords - baselineWords);
+  if (deltaWords <= 0) return 0;
+  return Math.round(deltaWords / (durationSec / 60));
+}
+
+async function verifyModelCache() {
+  if (typeof globalThis.caches?.open !== 'function') {
+    return { modelCached: false, vadCached: false };
+  }
+  try {
+    const cache = await globalThis.caches.open(CACHE_NAME);
+    const [modelHit, vadHit] = await Promise.all(
+      MODEL_CACHE_KEYS.map((key) => cache.match(key))
+    );
+    const result = {
+      modelCached: Boolean(modelHit),
+      vadCached: Boolean(vadHit),
+    };
+    logger.info('CacheStorage warmup check', result);
+    return result;
+  } catch (err) {
+    logger.warn('CacheStorage warmup check failed', { err });
+    return { modelCached: false, vadCached: false };
+  }
 }
 
 export function analyzeFillers(text, speechLang = 'uk-UA') {
@@ -136,6 +199,29 @@ export function useSpeechAnalytics(
 
   const lastTimelineBucketRef = useRef(-1);
 
+  // Zero-rerender audio meter refs driven via rAF in AudioVisualizer
+  const liveRmsRef = useRef(0);
+  const liveBarsRef = useRef(new Array(BAR_COUNT).fill(0.05));
+  const rmsStateRef = useRef(0);
+  const lastRmsStateFlushMsRef = useRef(null);
+
+  // Active speaking WPM & rolling 15s WPM refs
+  const activeElapsedSecRef = useRef(activeElapsedSec);
+  const startElapsedRef = useRef(null);
+  const firstSpeechSecRef = useRef(null);
+  const wordSamplesRef = useRef([]);
+
+  // Transcript throttle & mount warmup refs
+  const transcriptTimerRef = useRef(null);
+  const pendingTranscriptRef = useRef(null);
+  const lastTranscriptFlushMsRef = useRef(null);
+  const warmedEngineRef = useRef(null);
+  const liveCallbacksRef = useRef({
+    onProgress: null,
+    onTranscript: null,
+    onError: null,
+  });
+
   // Mutable refs for 60fps loop without stale closures
   const isRunningRef = useRef(isRunning);
   const silenceThresholdRef = useRef(silenceThreshold);
@@ -166,6 +252,10 @@ export function useSpeechAnalytics(
   const syllableCountRef = useRef(0);
   const burstArmedRef = useRef(true);
   const lastSyllableMsRef = useRef(0);
+
+  useEffect(() => {
+    activeElapsedSecRef.current = activeElapsedSec;
+  }, [activeElapsedSec]);
 
   useEffect(() => {
     isRunningRef.current = isRunning;
@@ -204,6 +294,11 @@ export function useSpeechAnalytics(
       cancelAnimationFrame(rafIdRef.current);
       rafIdRef.current = null;
     }
+    if (transcriptTimerRef.current !== null) {
+      clearTimeout(transcriptTimerRef.current);
+      transcriptTimerRef.current = null;
+    }
+    pendingTranscriptRef.current = null;
     if (micCaptureHandleRef.current) {
       try {
         micCaptureHandleRef.current.stop();
@@ -255,11 +350,98 @@ export function useSpeechAnalytics(
     lastFrameMsRef.current = null;
     silenceStartMsRef.current = null;
     isCurrentlyPausedRef.current = false;
+    liveRmsRef.current = 0;
+    liveBarsRef.current = new Array(BAR_COUNT).fill(0.05);
+    rmsStateRef.current = 0;
+    lastRmsStateFlushMsRef.current = null;
+    lastTranscriptFlushMsRef.current = null;
     setIsSilentPause(false);
     setCurrentSilenceSec(0);
     setRmsLevel(0);
     setFrequencyBars(new Array(BAR_COUNT).fill(0.05));
   }, []);
+
+  const pushAudioRms = useCallback((rms, bars) => {
+    const normalizedRms = Math.min(1, rms / 0.15);
+    liveRmsRef.current = normalizedRms;
+    liveBarsRef.current = bars || buildBarsFromRms(rms);
+
+    const now = performance.now();
+    if (
+      (rmsStateRef.current === 0 && normalizedRms > 0) ||
+      lastRmsStateFlushMsRef.current === null ||
+      now - lastRmsStateFlushMsRef.current >= RMS_STATE_THROTTLE_MS
+    ) {
+      lastRmsStateFlushMsRef.current = now;
+      rmsStateRef.current = normalizedRms;
+      setRmsLevel(normalizedRms);
+    }
+  }, []);
+
+  const markFirstSpeechDetected = useCallback(() => {
+    if (firstSpeechSecRef.current === null) {
+      const elapsed = activeElapsedSecRef.current;
+      const startAt = startElapsedRef.current ?? elapsed;
+      firstSpeechSecRef.current = elapsed > startAt ? elapsed : 0;
+    }
+  }, []);
+
+  const applyTranscriptPayload = useCallback(
+    ({ words: nextWords, fullText }) => {
+      const safeWords = Array.isArray(nextWords) ? nextWords : [];
+      const liveWordsCount = Math.max(countNormalizedWords(fullText), safeWords.length);
+      if (liveWordsCount > 0) {
+        markFirstSpeechDetected();
+      }
+      setWords(safeWords);
+      setWordCount(liveWordsCount);
+      setLiveTranscript(fullText || '');
+    },
+    [markFirstSpeechDetected]
+  );
+
+  const handleThrottledTranscript = useCallback(
+    (payload) => {
+      const safeWords = Array.isArray(payload?.words) ? payload.words : [];
+      const text = payload?.fullText || '';
+      const isEmptyReset = !text && safeWords.length === 0;
+      const now = performance.now();
+
+      if (
+        payload?.isFinal ||
+        isEmptyReset ||
+        lastTranscriptFlushMsRef.current === null ||
+        now - lastTranscriptFlushMsRef.current >= TRANSCRIPT_THROTTLE_MS
+      ) {
+        if (transcriptTimerRef.current !== null) {
+          clearTimeout(transcriptTimerRef.current);
+          transcriptTimerRef.current = null;
+        }
+        pendingTranscriptRef.current = null;
+        lastTranscriptFlushMsRef.current = now;
+        applyTranscriptPayload(payload || {});
+        return;
+      }
+
+      pendingTranscriptRef.current = payload;
+      if (transcriptTimerRef.current === null) {
+        const waitMs = Math.max(
+          0,
+          TRANSCRIPT_THROTTLE_MS - (now - lastTranscriptFlushMsRef.current)
+        );
+        transcriptTimerRef.current = setTimeout(() => {
+          transcriptTimerRef.current = null;
+          lastTranscriptFlushMsRef.current = performance.now();
+          const latest = pendingTranscriptRef.current;
+          pendingTranscriptRef.current = null;
+          if (latest) {
+            applyTranscriptPayload(latest);
+          }
+        }, waitMs);
+      }
+    },
+    [applyTranscriptPayload]
+  );
 
   const startSpeechRecognition = useCallback(() => {
     const SpeechRecognitionCtor =
@@ -286,10 +468,7 @@ export function useSpeechAnalytics(
         for (let i = event.resultIndex; i < event.results.length; i += 1) {
           const transcript = event.results[i][0].transcript.trim();
           if (!transcript) continue;
-          const count = transcript
-            .split(/[\s—–-]+/)
-            .map((w) => w.replace(/^[^\p{L}\p{N}'’]+|[^\p{L}\p{N}'’]+$/gu, ''))
-            .filter(Boolean).length;
+          const count = countNormalizedWords(transcript);
           if (event.results[i].isFinal) {
             newFinalWords += count;
           } else {
@@ -306,7 +485,11 @@ export function useSpeechAnalytics(
         const speechTotal = finalizedWordsRef.current + interimWordsRef.current;
         const syllableRatio = speechLangRef.current.startsWith('uk') ? 1.8 : 1.5;
         const burstEstimated = Math.round(syllableCountRef.current / syllableRatio);
-        setWordCount(Math.max(speechTotal, burstEstimated));
+        const nextTotal = Math.max(speechTotal, burstEstimated);
+        if (nextTotal > 0) {
+          markFirstSpeechDetected();
+        }
+        setWordCount(nextTotal);
         if (recentText) {
           setLiveTranscript(recentText.slice(-90));
         }
@@ -463,6 +646,9 @@ export function useSpeechAnalytics(
         syllableCountRef.current += 1;
 
         const burstWords = Math.round(syllableCountRef.current / 1.5);
+        if (burstWords > 0) {
+          markFirstSpeechDetected();
+        }
         if (estimationMethodRef.current === 'audio_burst') {
           setWordCount(burstWords);
         } else {
@@ -475,9 +661,7 @@ export function useSpeechAnalytics(
 
       if (now - uiThrottleMs >= 50) {
         uiThrottleMs = now;
-        const normalizedRms = Math.min(1, rms / 0.15);
-        setRmsLevel(normalizedRms);
-        setFrequencyBars(bars);
+        pushAudioRms(rms, bars);
         if (silenceStartMsRef.current !== null) {
           setCurrentSilenceSec(Number(((now - silenceStartMsRef.current) / 1000).toFixed(1)));
         } else {
@@ -489,6 +673,76 @@ export function useSpeechAnalytics(
     };
 
     rafIdRef.current = requestAnimationFrame(tick);
+  }, [pushAudioRms]);
+
+  // Pre-warm WASM runtime & verify CacheStorage on mount when idle
+  useEffect(() => {
+    const useWasmPipeline =
+      Boolean(engineFactoryRef.current) || typeof globalThis.Worker !== 'undefined';
+    if (!useWasmPipeline || isSimulatedMic || isRunning || warmedEngineRef.current) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    const activeLang = speechLang.startsWith('uk') ? 'uk' : 'en';
+    verifyModelCache();
+
+    const adapter = engineFactoryRef.current
+      ? engineFactoryRef.current()
+      : createDefaultAsrEngine();
+    setModelProgress({ percent: 0, cached: false, ready: false });
+
+    const initPromise = adapter
+      .init({
+        lang: activeLang,
+        onProgress: ({ percent, cached }) => {
+          if (liveCallbacksRef.current.onProgress) {
+            liveCallbacksRef.current.onProgress({ percent, cached });
+          } else if (!cancelled) {
+            setModelProgress({ percent, cached, ready: percent >= 100 });
+          }
+        },
+        onTranscript: (payload) => {
+          liveCallbacksRef.current.onTranscript?.(payload);
+        },
+        onError: (err) => {
+          if (liveCallbacksRef.current.onError) {
+            liveCallbacksRef.current.onError(err);
+          } else {
+            logger.error('WASM ASR warmup error', { err });
+            if (!cancelled) {
+              setEngineError(err?.message || 'ASR engine error');
+              setModelProgress({ percent: 0, cached: false, ready: false });
+            }
+          }
+        },
+      })
+      .then(() => {
+        if (!cancelled && !liveCallbacksRef.current.onProgress) {
+          setModelProgress((prev) => ({ ...prev, percent: 100, ready: true }));
+        }
+      });
+
+    // Attach catch so idle warmup rejection doesn't create an unhandled rejection before Start
+    initPromise.catch(() => {});
+    warmedEngineRef.current = { adapter, lang: activeLang, initPromise };
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isRunning, isSimulatedMic, speechLang]);
+
+  useEffect(() => {
+    return () => {
+      if (warmedEngineRef.current) {
+        try {
+          warmedEngineRef.current.adapter.destroy();
+        } catch {
+          // Ignore destroy errors
+        }
+        warmedEngineRef.current = null;
+      }
+    };
   }, []);
 
   // Manage lifecycle when `isRunning` changes
@@ -548,40 +802,64 @@ export function useSpeechAnalytics(
         Boolean(engineFactoryRef.current) || typeof globalThis.Worker !== 'undefined';
 
       if (useWasmPipeline) {
-        const adapter = engineFactoryRef.current
-          ? engineFactoryRef.current()
-          : createDefaultAsrEngine();
+        const activeLang = speechLangRef.current.startsWith('uk') ? 'uk' : 'en';
+        const warmed = warmedEngineRef.current;
+        const canReuseWarmed = Boolean(warmed && warmed.lang === activeLang);
+        if (warmed && !canReuseWarmed) {
+          warmed.adapter.destroy();
+          warmedEngineRef.current = null;
+        }
+
+        const adapter = canReuseWarmed
+          ? warmed.adapter
+          : engineFactoryRef.current
+            ? engineFactoryRef.current()
+            : createDefaultAsrEngine();
+        if (canReuseWarmed) {
+          warmedEngineRef.current = null;
+        }
+
         asrEngineRef.current = adapter;
-        setModelProgress({ percent: 0, cached: false, ready: false });
+        if (!canReuseWarmed) {
+          setModelProgress({ percent: 0, cached: false, ready: false });
+        }
+
+        const onProgressCb = ({ percent, cached }) => {
+          if (!cancelled) {
+            setModelProgress({
+              percent,
+              cached,
+              ready: percent >= 100,
+            });
+          }
+        };
+        const onTranscriptCb = (payload) => {
+          if (cancelled) return;
+          handleThrottledTranscript(payload);
+        };
+        const onErrorCb = (err) => {
+          logger.error('WASM ASR engine error', { err });
+          if (!cancelled) {
+            setEngineError(err?.message || 'ASR engine error');
+          }
+        };
+        liveCallbacksRef.current = {
+          onProgress: onProgressCb,
+          onTranscript: onTranscriptCb,
+          onError: onErrorCb,
+        };
 
         try {
-          await adapter.init({
-            lang: speechLangRef.current.startsWith('uk') ? 'uk' : 'en',
-            onProgress: ({ percent, cached }) => {
-              if (!cancelled) {
-                setModelProgress({
-                  percent,
-                  cached,
-                  ready: percent >= 100,
-                });
-              }
-            },
-            onTranscript: ({ words: nextWords, fullText }) => {
-              if (cancelled) return;
-              const safeWords = Array.isArray(nextWords) ? nextWords : [];
-              setWords(safeWords);
-              setWordCount(safeWords.length);
-              if (fullText) {
-                setLiveTranscript(fullText);
-              }
-            },
-            onError: (err) => {
-              logger.error('WASM ASR engine error', { err });
-              if (!cancelled) {
-                setEngineError(err?.message || 'ASR engine error');
-              }
-            },
-          });
+          if (canReuseWarmed) {
+            await warmed.initPromise;
+          } else {
+            await adapter.init({
+              lang: activeLang,
+              onProgress: onProgressCb,
+              onTranscript: onTranscriptCb,
+              onError: onErrorCb,
+            });
+          }
 
           if (cancelled || !isRunningRef.current) {
             adapter.destroy();
@@ -595,10 +873,7 @@ export function useSpeechAnalytics(
 
           const capture = await micCaptureFactoryRef.current({
             onChunk: (chunk) => adapter.pushAudio(chunk),
-            onRms: (rms) => {
-              setRmsLevel(Math.min(1, rms / 0.15));
-              setFrequencyBars(buildBarsFromRms(rms));
-            },
+            onRms: (rms) => pushAudioRms(rms),
           });
 
           if (cancelled || !isRunningRef.current) {
@@ -653,9 +928,18 @@ export function useSpeechAnalytics(
 
     return () => {
       cancelled = true;
+      liveCallbacksRef.current = { onProgress: null, onTranscript: null, onError: null };
       stopAudioAndSpeech();
     };
-  }, [isRunning, isSimulatedMic, startAnalysisLoop, startSpeechRecognition, stopAudioAndSpeech]);
+  }, [
+    isRunning,
+    isSimulatedMic,
+    handleThrottledTranscript,
+    pushAudioRms,
+    startAnalysisLoop,
+    startSpeechRecognition,
+    stopAudioAndSpeech,
+  ]);
 
   const resetAnalytics = useCallback(() => {
     stopAudioAndSpeech();
@@ -669,6 +953,9 @@ export function useSpeechAnalytics(
     syllableCountRef.current = 0;
     burstArmedRef.current = true;
     lastSyllableMsRef.current = 0;
+    startElapsedRef.current = null;
+    firstSpeechSecRef.current = null;
+    wordSamplesRef.current = [];
 
     setRmsLevel(0);
     setFrequencyBars(new Array(BAR_COUNT).fill(0.05));
@@ -706,8 +993,34 @@ export function useSpeechAnalytics(
     ? timestampPauses.currentSilenceSec
     : currentSilenceSec;
 
+  // Synchronize active-speech start timestamp and 15s rolling word samples before computing WPM
+  if (isRunning) {
+    if (startElapsedRef.current === null) {
+      startElapsedRef.current = activeElapsedSec;
+    }
+    if (wordCount > 0) {
+      const samples = wordSamplesRef.current;
+      const last = samples[samples.length - 1];
+      if (last && last.t === activeElapsedSec) {
+        last.words = wordCount;
+      } else {
+        samples.push({ t: activeElapsedSec, words: wordCount });
+      }
+    }
+  }
+
+  const speakingElapsedSec = Math.max(0, activeElapsedSec - (firstSpeechSecRef.current ?? 0));
+
   const wpm = useMemo(() => {
-    return computeOverallWpm(wordCount, activeElapsedSec);
+    return computeOverallWpm(wordCount, speakingElapsedSec);
+  }, [speakingElapsedSec, wordCount]);
+
+  const rollingWpm = useMemo(() => {
+    return computeRollingWpm(
+      wordSamplesRef.current,
+      activeElapsedSec,
+      firstSpeechSecRef.current ?? 0
+    );
   }, [activeElapsedSec, wordCount]);
 
   // Record 10-second pacing timeline snapshots while running
@@ -739,10 +1052,13 @@ export function useSpeechAnalytics(
   return {
     rmsLevel,
     frequencyBars,
+    liveRmsRef,
+    liveBarsRef,
     wordCount,
     words,
     setWordCount,
     wpm,
+    rollingWpm,
     pacingZone,
     pauseCount: effectivePauseCount,
     totalPauseSec: effectiveTotalPauseSec,
