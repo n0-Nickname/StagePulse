@@ -148,4 +148,32 @@ describe('PracticePage', () => {
     expect(await screen.findByRole('button', { name: /Зберегти сесію/i })).toBeInTheDocument();
     delete window.SpeechRecognition;
   });
+
+  it('displays WASM engineError alert and reflects modelProgress in progress bar', async () => {
+    globalThis.Worker = class {
+      constructor() {
+        this.onmessage = null;
+        this.onerror = null;
+        this.terminate = vi.fn();
+        this.postMessage = () => {
+          this.onmessage?.({ data: { type: 'MODEL_PROGRESS', percent: 42, cached: false } });
+          this.onmessage?.({ data: { type: 'ENGINE_ERROR', message: 'WASM model corrupt' } });
+        };
+      }
+    };
+
+    render(
+      <MemoryRouter initialEntries={['/practice']}>
+        <LanguageProvider>
+          <PracticePage />
+        </LanguageProvider>
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Start rehearsal/i }));
+    await waitFor(() => expect(screen.getByText('WASM model corrupt')).toBeInTheDocument());
+    expect(screen.getByTestId('wasm-progress-bar')).toHaveAttribute('aria-valuenow', '0');
+
+    delete globalThis.Worker;
+  });
 });

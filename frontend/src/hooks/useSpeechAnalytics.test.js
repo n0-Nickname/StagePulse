@@ -612,4 +612,51 @@ describe('useSpeechAnalytics', () => {
       rejectMedia(new Error('late rejection'));
     });
   });
+
+  it('surfaces ENGINE_ERROR via logger.error and engineError UI state on init rejection and runtime onError', async () => {
+    vi.stubEnv('VITE_APP_ENV', 'prod');
+    vi.stubEnv('VITE_LOG_LEVEL', 'error');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    // Case 1: WASM init rejection surfaces engineError while falling back
+    const failFactory = () => ({
+      init: vi.fn().mockRejectedValue(new Error('HTML 404 fallback for model')),
+      destroy: vi.fn(),
+    });
+    const { result, unmount } = renderHook(() =>
+      useSpeechAnalytics(true, 0, 'en-US', { engineFactory: failFactory })
+    );
+    await waitFor(() => expect(result.current.engineError).toBe('HTML 404 fallback for model'));
+    expect(errorSpy).toHaveBeenCalled();
+
+    await act(async () => {
+      result.current.resetAnalytics();
+    });
+    expect(result.current.engineError).toBeNull();
+    unmount();
+
+    // Case 2: Runtime onError callback after init resolves
+    let initOpts = null;
+    const runtimeErrFactory = () => ({
+      init: vi.fn(async (opts) => {
+        initOpts = opts;
+      }),
+      pushAudio: vi.fn(),
+      destroy: vi.fn(),
+    });
+    const runtimeCapFactory = vi.fn(async () => ({ stop: vi.fn() }));
+    const { result: r2, unmount: u2 } = renderHook(() =>
+      useSpeechAnalytics(true, 0, 'en-US', {
+        engineFactory: runtimeErrFactory,
+        micCaptureFactory: runtimeCapFactory,
+      })
+    );
+    await waitFor(() => expect(initOpts).not.toBeNull());
+    act(() => {
+      initOpts.onError(new Error('Runtime WASM trap'));
+    });
+    expect(r2.current.engineError).toBe('Runtime WASM trap');
+    u2();
+    vi.unstubAllEnvs();
+  });
 });

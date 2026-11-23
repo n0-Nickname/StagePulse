@@ -280,4 +280,67 @@ describe('audio/micCapture.js', () => {
 
     globalThis.AudioContext = origAC;
   });
+
+  it('logs AudioContext.sampleRate, resampler rates, chunk length, RMS, and clamps samples to [-1, 1]', async () => {
+    vi.stubEnv('VITE_APP_ENV', 'prod');
+    vi.stubEnv('VITE_LOG_LEVEL', 'debug');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const chunks = [];
+    const push = createResampler(48000, 4, (c) => chunks.push(c));
+    push(new Float32Array(20).fill(2.5));
+    expect(chunks.length).toBeGreaterThanOrEqual(1);
+    for (const s of chunks[0]) {
+      expect(s).toBeLessThanOrEqual(1);
+      expect(s).toBeGreaterThanOrEqual(-1);
+    }
+
+    const stopTrack = vi.fn();
+    vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockResolvedValueOnce({
+      getTracks: () => [{ stop: stopTrack }],
+    });
+    let workletNode = null;
+    const origAC = globalThis.AudioContext;
+    globalThis.AudioContext = class {
+      constructor() {
+        this.state = 'running';
+        this.sampleRate = 48000;
+        this.audioWorklet = { addModule: vi.fn().mockResolvedValue(undefined) };
+      }
+      createMediaStreamSource() {
+        return { connect: vi.fn(), disconnect: vi.fn() };
+      }
+      close() {}
+    };
+    globalThis.AudioWorkletNode = class {
+      constructor() {
+        this.port = { onmessage: null };
+        this.disconnect = vi.fn();
+        workletNode = this;
+      }
+    };
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:clamp');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+
+    const received = [];
+    const capture = await startMicCapture({ onChunk: (c) => received.push(c), silentCheckMs: 5000 });
+    workletNode.port.onmessage({ data: new Float32Array([1.9, -1.7, Number.NaN, 0.25]) });
+    expect(Array.from(received[0])).toEqual([1, -1, 0, 0.25]);
+
+    const parsedLogs = logSpy.mock.calls.map((c) => JSON.parse(c[0]));
+    expect(
+      parsedLogs.some(
+        (l) => l.logger === 'Audio:Mic' && l.sampleRate === 48000 && l.outputRate === 16000
+      )
+    ).toBe(true);
+    expect(
+      parsedLogs.some(
+        (l) => l.logger === 'Audio:Mic' && l.chunkLength === 4 && typeof l.rms === 'number'
+      )
+    ).toBe(true);
+
+    capture.stop();
+    globalThis.AudioContext = origAC;
+    vi.unstubAllEnvs();
+  });
 });

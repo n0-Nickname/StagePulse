@@ -8,6 +8,7 @@ describe('services/asrAdapter.js', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     delete globalThis.Worker;
   });
 
@@ -143,5 +144,51 @@ describe('services/asrAdapter.js', () => {
     const p2 = adapter2.init({ onError });
     created.onerror({ message: 'Worker crashed' });
     await expect(p2).rejects.toThrow('Worker crashed');
+  });
+
+  it('logs INIT, MODEL_READY, ENGINE_ERROR, and handles zero-copy subarray views safely', async () => {
+    vi.stubEnv('VITE_APP_ENV', 'prod');
+    vi.stubEnv('VITE_LOG_LEVEL', 'debug');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    let workerInstance = null;
+    const adapter = new AsrEngineAdapter({
+      workerFactory: () => {
+        workerInstance = {
+          onmessage: null,
+          onerror: null,
+          postMessage: vi.fn(),
+          terminate: vi.fn(),
+        };
+        return workerInstance;
+      },
+    });
+
+    const onError = vi.fn();
+    const p = adapter.init({ lang: 'uk', onError });
+    workerInstance.onmessage({ data: { type: 'MODEL_READY' } });
+    await p;
+
+    // Subarray view must be copied to its own buffer before transferring
+    const backing = new Float32Array([0.1, 0.2, 0.3, 0.4]);
+    const subview = backing.subarray(1, 3);
+    adapter.pushAudio(subview);
+    const [payload, transfers] = workerInstance.postMessage.mock.calls.at(-1);
+    expect(payload.type).toBe('AUDIO_CHUNK');
+    expect(Array.from(payload.samples)).toEqual([0.20000000298023224, 0.30000001192092896]);
+    expect(transfers[0]).not.toBe(backing.buffer);
+
+    workerInstance.onmessage({ data: { type: 'ENGINE_ERROR', message: 'Corrupt WASM' } });
+    expect(errorSpy).toHaveBeenCalled();
+    expect(JSON.parse(errorSpy.mock.calls[0][0])).toMatchObject({
+      level: 'error',
+      logger: 'ASR:Adapter',
+      message: 'Corrupt WASM',
+    });
+
+    expect(
+      logSpy.mock.calls.some((c) => c[0].includes('"logger":"ASR:Adapter"') && c[0].includes('INIT'))
+    ).toBe(true);
   });
 });
