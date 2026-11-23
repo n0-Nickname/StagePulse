@@ -209,7 +209,7 @@ export default function PracticePage() {
   );
 
   return (
-    <div className="max-w-5xl mx-auto px-3 sm:px-4 py-5 sm:py-8 pb-28 sm:pb-8 space-y-5 sm:space-y-6 text-[#F4F5F7]">
+    <div className="w-full max-w-5xl mx-auto overflow-x-hidden px-3 sm:px-4 py-5 sm:py-8 pb-28 sm:pb-8 space-y-5 sm:space-y-6 text-[#F4F5F7]">
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 pb-4 border-b border-white/[0.08]">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-[#F4F5F7]">
@@ -224,7 +224,7 @@ export default function PracticePage() {
           <button
             type="button"
             onClick={() => analytics.setIsSimulatedMic((v) => !v)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
+            className={`min-h-[44px] px-3 py-2 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
               analytics.isSimulatedMic
                 ? 'bg-[#FF6363]/15 border-[#FF6363]/60 text-[#FF6363]'
                 : 'obsidian-inset text-[#9CA3AF] hover:text-[#F4F5F7]'
@@ -237,7 +237,7 @@ export default function PracticePage() {
             <button
               type="button"
               onClick={() => analytics.setIsSimulatingSilence((v) => !v)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
+              className={`min-h-[44px] px-3 py-2 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
                 analytics.isSimulatingSilence
                   ? 'bg-[#F59E0B]/15 border-[#F59E0B] text-[#F59E0B]'
                   : 'obsidian-inset text-[#9CA3AF] hover:text-[#F4F5F7]'
@@ -335,7 +335,7 @@ export default function PracticePage() {
       <LiveMetricsBar store={speechStore} onUnlockClick={openSlotModal} />
 
       {/* PRO — Custom Filler Dictionary Manager */}
-      <section className="obsidian-glass rounded-2xl p-4 sm:p-5 space-y-3">
+      <section className="obsidian-glass rounded-2xl p-3 sm:p-6 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Tag className="h-4 w-4 text-[#8B5CF6]" />
@@ -363,7 +363,7 @@ export default function PracticePage() {
             <button
               type="button"
               onClick={openSlotModal}
-              className="crimson-glow-btn inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold shrink-0 cursor-pointer"
+              className="crimson-glow-btn inline-flex min-h-[44px] items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold shrink-0 cursor-pointer"
             >
               <Sparkles className="h-3.5 w-3.5" />
               {t('practice.upgradePro')}
@@ -378,12 +378,12 @@ export default function PracticePage() {
                 value={fillerInput}
                 onChange={(e) => setFillerInput(e.target.value)}
                 placeholder={t('practice.fillerDictPlaceholder')}
-                className="flex-1 rounded-xl obsidian-inset px-3.5 py-2 text-sm text-[#F4F5F7] placeholder-[#6B7280] focus:outline-none focus:border-[#8B5CF6]"
+                className="flex-1 min-h-[44px] rounded-xl obsidian-inset px-3.5 py-2 text-sm text-[#F4F5F7] placeholder-[#6B7280] focus:outline-none focus:border-[#8B5CF6]"
               />
               <button
                 type="submit"
                 disabled={isSyncingDict}
-                className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-[#8B5CF6]/20 border border-[#8B5CF6]/45 text-[#C4B5FD] hover:bg-[#8B5CF6]/30 disabled:opacity-50 transition-colors cursor-pointer"
+                className="inline-flex min-h-[44px] items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-[#8B5CF6]/20 border border-[#8B5CF6]/45 text-[#C4B5FD] hover:bg-[#8B5CF6]/30 disabled:opacity-50 transition-colors cursor-pointer"
               >
                 <Plus className="h-3.5 w-3.5" />
                 {t('practice.fillerDictAdd')}
@@ -407,7 +407,7 @@ export default function PracticePage() {
                 {userFillerWords.map((word) => (
                   <span
                     key={word}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-[#121317] border border-white/[0.1] text-[#F4F5F7]"
+                    className="inline-flex items-center gap-1 pl-3 pr-1 rounded-full text-xs font-medium bg-[#121317] border border-white/[0.1] text-[#F4F5F7]"
                   >
                     <span>{word}</span>
                     <button
@@ -415,9 +415,9 @@ export default function PracticePage() {
                       onClick={() => handleRemoveFillerWord(word)}
                       disabled={isSyncingDict}
                       aria-label={`${t('practice.fillerDictRemove')} ${word}`}
-                      className="text-[#9CA3AF] hover:text-[#FF6363] disabled:opacity-50 transition-colors cursor-pointer"
+                      className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center text-[#9CA3AF] hover:text-[#FF6363] disabled:opacity-50 transition-colors cursor-pointer"
                     >
-                      <X className="h-3 w-3" />
+                      <X className="h-3.5 w-3.5" />
                     </button>
                   </span>
                 ))}

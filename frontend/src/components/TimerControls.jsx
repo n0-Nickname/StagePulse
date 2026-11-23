@@ -52,7 +52,7 @@ function TimerControls({
   const progressScale = Math.min(1, Math.max(0, (progressPct || 0) / 100));
 
   return (
-    <div className="obsidian-glass rounded-2xl p-4 sm:p-6 space-y-5 sm:space-y-6">
+    <div className="obsidian-glass rounded-2xl p-3 sm:p-6 space-y-5 sm:space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <div className="text-xs font-medium uppercase tracking-wider text-[#9CA3AF]">
@@ -141,7 +141,7 @@ function TimerControls({
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-white/[0.08]">
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
           {PRESET_MINUTES.map((mins) => {
             const sec = mins * 60;
             const active = targetDurationSec === sec;
@@ -151,7 +151,7 @@ function TimerControls({
                 type="button"
                 disabled={isRunning}
                 onClick={() => onSetTargetDuration(sec)}
-                className={`min-h-[38px] px-3 py-1.5 rounded-lg text-xs font-mono font-medium border transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed ${
+                className={`flex-1 sm:flex-none min-h-[44px] px-3 py-1.5 rounded-lg text-xs font-mono font-medium border transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed ${
                   active
                     ? 'bg-[#FF6363]/15 border-[#FF6363]/60 text-[#FF6363]'
                     : 'obsidian-inset text-[#9CA3AF] hover:text-[#F4F5F7]'
@@ -163,7 +163,7 @@ function TimerControls({
           })}
         </div>
 
-        <form onSubmit={handleCustomSubmit} className="flex items-center gap-2">
+        <form onSubmit={handleCustomSubmit} className="flex items-center gap-2 w-full sm:w-auto">
           <input
             type="number"
             min="0.5"
@@ -174,12 +174,12 @@ function TimerControls({
             onChange={(e) => setCustomMin(e.target.value)}
             placeholder={t('timer.customMinPlaceholder')}
             aria-label={t('timer.customMinPlaceholder')}
-            className="w-24 sm:w-28 min-h-[38px] rounded-lg obsidian-inset px-2.5 py-1.5 text-xs font-mono text-[#F4F5F7] placeholder-[#6B7280] focus:outline-none focus:border-[#FF6363] disabled:opacity-50"
+            className="flex-1 min-w-0 sm:flex-none sm:w-28 min-h-[44px] rounded-lg obsidian-inset px-2.5 py-1.5 text-xs font-mono text-[#F4F5F7] placeholder-[#6B7280] focus:outline-none focus:border-[#FF6363] disabled:opacity-50"
           />
           <button
             type="submit"
             disabled={isRunning || !customMin}
-            className="min-h-[38px] px-3 py-1.5 rounded-lg text-xs font-medium obsidian-inset text-[#F4F5F7] hover:bg-white/[0.08] disabled:opacity-45 cursor-pointer disabled:cursor-not-allowed transition-colors"
+            className="min-h-[44px] px-3.5 py-1.5 rounded-lg text-xs font-medium obsidian-inset text-[#F4F5F7] hover:bg-white/[0.08] disabled:opacity-45 cursor-pointer disabled:cursor-not-allowed transition-colors"
           >
             {t('timer.set')}
           </button>

@@ -92,9 +92,9 @@ function AudioVisualizer({
           </span>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 sm:gap-4">
+        <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3 sm:gap-4 w-full lg:w-auto">
           {onChangeSpeechLang && (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center justify-between sm:justify-start gap-2 w-full sm:w-auto">
               <label
                 htmlFor="speech-lang-select"
                 className="text-xs font-medium text-[#9CA3AF] whitespace-nowrap"
@@ -105,7 +105,7 @@ function AudioVisualizer({
                 id="speech-lang-select"
                 value={speechLang}
                 onChange={(e) => onChangeSpeechLang(e.target.value)}
-                className="rounded-lg obsidian-inset px-2.5 py-1.5 text-xs text-[#F4F5F7] focus:outline-none focus:border-[#FF6363] cursor-pointer"
+                className="min-h-[44px] rounded-lg obsidian-inset px-2.5 py-1.5 text-xs text-[#F4F5F7] focus:outline-none focus:border-[#FF6363] cursor-pointer"
               >
                 <option value="uk-UA">{t('audio.speechLangUk')}</option>
                 <option value="en-US">{t('audio.speechLangEn')}</option>
@@ -113,13 +113,24 @@ function AudioVisualizer({
             </div>
           )}
 
-          <div className="flex items-center gap-3 w-full sm:w-auto">
-            <label
-              htmlFor="noise-gate-slider"
-              className="text-xs font-mono text-[#9CA3AF] whitespace-nowrap tabular-nums"
+          <div className="flex flex-col gap-1 w-full sm:min-w-[220px] sm:flex-1 lg:w-64">
+            <div
+              data-testid="noise-gate-header"
+              className="flex items-center justify-between gap-2"
             >
-              {t('audio.noiseGate')} ({noiseThreshold.toFixed(3)})
-            </label>
+              <label
+                htmlFor="noise-gate-slider"
+                className="text-xs font-mono text-[#9CA3AF] tabular-nums"
+              >
+                {t('audio.noiseGate')}
+              </label>
+              <span
+                data-testid="noise-gate-value"
+                className="text-xs font-mono font-semibold text-[#F4F5F7] tabular-nums shrink-0"
+              >
+                {noiseThreshold.toFixed(3)}
+              </span>
+            </div>
             <input
               id="noise-gate-slider"
               type="range"
@@ -128,7 +139,7 @@ function AudioVisualizer({
               step="0.005"
               value={noiseThreshold}
               onChange={(e) => onChangeThreshold?.(parseFloat(e.target.value))}
-              className="flex-1 sm:w-32 accent-[#FF6363] cursor-pointer"
+              className="w-full min-h-[44px] touch-none accent-[#FF6363] cursor-pointer"
             />
           </div>
         </div>

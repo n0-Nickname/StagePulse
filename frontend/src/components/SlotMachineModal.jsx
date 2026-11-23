@@ -301,7 +301,7 @@ export default function SlotMachineModal({ isOpen, onClose }) {
 
   return (
     <div
-      className="modal-backdrop-in fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-4"
+      className="modal-backdrop-in fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/75 backdrop-blur-md p-3 sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="slot-modal-title"
@@ -326,7 +326,7 @@ export default function SlotMachineModal({ isOpen, onClose }) {
 
       <div
         data-testid="slot-modal-card"
-        className={`modal-spring-in relative w-full max-w-md overflow-hidden rounded-2xl obsidian-glass p-6 shadow-2xl transition-all ${
+        className={`modal-spring-in relative w-full max-w-md overflow-hidden rounded-2xl obsidian-glass p-3 sm:p-6 shadow-2xl transition-all ${
           isMilestoneUnlocked
             ? 'milestone-frame-glow milestone-shake border-[#F59E0B]/80'
             : ''
@@ -346,7 +346,7 @@ export default function SlotMachineModal({ isOpen, onClose }) {
             type="button"
             onClick={() => setMuted((prev) => !prev)}
             aria-label={muted ? 'Unmute sound' : 'Mute sound'}
-            className="rounded-lg p-1.5 text-[#9CA3AF] hover:bg-white/[0.08] hover:text-[#F4F5F7] transition-colors cursor-pointer"
+            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg p-2 text-[#9CA3AF] hover:bg-white/[0.08] hover:text-[#F4F5F7] transition-colors cursor-pointer"
           >
             {muted ? (
               <VolumeX className="h-4 w-4" />
@@ -359,7 +359,7 @@ export default function SlotMachineModal({ isOpen, onClose }) {
             onClick={onClose}
             disabled={isSpinning}
             aria-label={t('common.close')}
-            className="rounded-lg p-1.5 text-[#9CA3AF] hover:bg-white/[0.08] hover:text-[#F4F5F7] transition-colors cursor-pointer disabled:opacity-40"
+            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg p-2 text-[#9CA3AF] hover:bg-white/[0.08] hover:text-[#F4F5F7] transition-colors cursor-pointer disabled:opacity-40"
           >
             <X className="h-5 w-5" />
           </button>
@@ -375,24 +375,27 @@ export default function SlotMachineModal({ isOpen, onClose }) {
           </div>
           <h2
             id="slot-modal-title"
-            className="text-2xl font-bold tracking-tight text-[#F4F5F7]"
+            className="text-xl sm:text-2xl font-bold tracking-tight text-[#F4F5F7]"
           >
             {isMilestoneUnlocked ? t('slots.milestoneTitle') : t('slots.title')}
           </h2>
-          <p className="mt-1 text-sm text-[#9CA3AF]">
+          <p className="mt-1 text-xs sm:text-sm text-[#9CA3AF]">
             {isMilestoneUnlocked ? t('slots.milestoneDesc') : t('slots.subtitle')}
           </p>
         </div>
 
         {/* 3-Reel Pace Milestone Window */}
-        <div className="relative z-10 mt-6 grid grid-cols-3 gap-3 rounded-2xl obsidian-inset p-4 shadow-inner">
+        <div
+          data-testid="slot-reels-container"
+          className="relative z-10 mt-4 sm:mt-6 grid grid-cols-3 gap-2 sm:gap-4 rounded-2xl obsidian-inset p-3 sm:p-6 shadow-inner"
+        >
           {strips.map((strip, idx) => {
             const spinning = spinningReels[idx];
             const landed = landedReels[idx];
             return (
               <div
                 key={idx}
-                className={`relative h-24 overflow-hidden rounded-xl border bg-[#121317] ${
+                className={`relative h-24 min-w-0 w-full overflow-hidden rounded-xl border bg-[#121317] ${
                   isMilestoneUnlocked
                     ? 'border-[#F59E0B]/70 bg-[#F59E0B]/10'
                     : 'border-white/[0.08]'
@@ -425,16 +428,16 @@ export default function SlotMachineModal({ isOpen, onClose }) {
                     return (
                       <div
                         key={itemIdx}
-                        className="flex h-24 flex-col items-center justify-center"
+                        className="flex h-24 min-w-0 flex-col items-center justify-center px-1"
                       >
                         <span
-                          className="text-4xl leading-none select-none"
+                          className="text-3xl sm:text-5xl leading-none select-none"
                           role="img"
                           aria-label={sym.label}
                         >
                           {sym.emoji}
                         </span>
-                        <span className="mt-1.5 text-[10px] font-mono font-semibold uppercase tracking-wider text-[#9CA3AF]">
+                        <span className="mt-1.5 max-w-full truncate text-[clamp(9px,2.5vw,10px)] font-mono font-semibold uppercase tracking-wider text-[#9CA3AF]">
                           {sym.label}
                         </span>
                       </div>
@@ -470,12 +473,12 @@ export default function SlotMachineModal({ isOpen, onClose }) {
         )}
 
         {/* Action Button */}
-        <div className="relative z-10 mt-6 flex flex-col gap-2">
+        <div className="relative z-10 mt-4 sm:mt-6 flex flex-col gap-2">
           <button
             type="button"
             onClick={handleSpin}
             disabled={isSpinning || (!user?.is_pro && spinsRemaining <= 0)}
-            className="crimson-glow-btn flex w-full items-center justify-center gap-2 rounded-xl disabled:opacity-50 px-4 py-3 text-sm font-semibold cursor-pointer"
+            className="crimson-glow-btn flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl disabled:opacity-50 px-4 py-3 text-sm font-semibold cursor-pointer"
           >
             <RotateCw className={`h-4 w-4 ${isSpinning ? 'animate-spin' : ''}`} />
             {isSpinning
@@ -489,7 +492,7 @@ export default function SlotMachineModal({ isOpen, onClose }) {
             <button
               type="button"
               onClick={onClose}
-              className="w-full rounded-xl bg-[#10B981] hover:bg-[#059669] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors cursor-pointer"
+              className="min-h-[44px] w-full rounded-xl bg-[#10B981] hover:bg-[#059669] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors cursor-pointer"
             >
               {t('slots.done')}
             </button>
