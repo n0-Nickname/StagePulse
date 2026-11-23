@@ -410,4 +410,90 @@ describe('workers/asr.worker.js', () => {
     createUrlSpy.mockRestore();
     revokeUrlSpy.mockRestore();
   });
+
+  it('tightens endpointing by flushing pending partials after post-speech silence (~550ms) and preserving monotonic timestamps', async () => {
+    vi.stubEnv('VITE_APP_ENV', 'prod');
+    vi.stubEnv('VITE_LOG_LEVEL', 'debug');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const store = new Map();
+    Object.defineProperty(globalThis, 'caches', {
+      value: {
+        open: vi.fn(async () => ({
+          match: async (k) => store.get(k),
+          put: async (k, v) => store.set(k, v),
+          delete: async (k) => store.delete(k),
+        })),
+      },
+      configurable: true,
+    });
+
+    const wasmMagic = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+    globalThis.fetch = vi.fn(async (url) => {
+      if (url.endsWith('.wasm')) {
+        return makeResponse(wasmMagic, { headers: { 'content-length': '8' } });
+      }
+      return makeResponse(new Uint8Array([1, 2, 3]), { headers: { 'content-length': '3' } });
+    });
+
+    const fakeMem = new ArrayBuffer(65536);
+    const memView = new Uint8Array(fakeMem);
+    const enc = new TextEncoder();
+    const partialPtr = 4096;
+    const commitPtr = 8192;
+    const emptyPtr = 12288;
+    memView.set(enc.encode(`${JSON.stringify([{ type: 'partial', open: ['привіт'], tail: [] }])}\0`), partialPtr);
+    memView.set(
+      enc.encode(`${JSON.stringify([{ type: 'commit', words: [{ text: 'привіт', start: 0.1, end: 0.4 }] }])}\0`),
+      commitPtr
+    );
+    memView.set(enc.encode('[]\0'), emptyPtr);
+
+    let offset = 16384;
+    let pushCall = 0;
+    const mockExports = {
+      memory: { buffer: fakeMem },
+      tinyasr_alloc: vi.fn((len) => {
+        const ptr = offset;
+        offset += (len + 11) & ~3;
+        return ptr;
+      }),
+      tinyasr_dealloc: vi.fn(),
+      tinyasr_load: vi.fn(() => 101),
+      tinyasr_clock: vi.fn(() => 10),
+      tinyasr_session_new: vi.fn(() => 202),
+      tinyasr_session_push: vi.fn(() => {
+        pushCall += 1;
+        return pushCall === 1 ? partialPtr : emptyPtr;
+      }),
+      tinyasr_session_finish: vi.fn(() => commitPtr),
+      tinyasr_session_free: vi.fn(),
+    };
+    globalThis.WebAssembly = {
+      instantiate: vi.fn(async () => ({ instance: { exports: mockExports } })),
+    };
+
+    await import('./asr.worker.js');
+    await globalThis.self.onmessage({
+      data: { type: 'INIT', lang: 'uk', wasmUrl: '/wasm/tinyasr.wasm', endpointSilenceMs: 550 },
+    });
+
+    // Chunk 1: speech (640 samples = 40ms, high RMS) -> emits pending partial
+    await globalThis.self.onmessage({
+      data: { type: 'AUDIO_CHUNK', samples: new Float32Array(640).fill(0.2) },
+    });
+    expect(postedMessages.at(-1)).toMatchObject({ type: 'TRANSCRIPT_UPDATE', fullText: 'привіт', isFinal: false });
+
+    // 15 silent chunks (15 * 40ms = 600ms >= 550ms) -> triggers endpointing flush & seamless session restart
+    for (let i = 0; i < 15; i += 1) {
+      await globalThis.self.onmessage({
+        data: { type: 'AUDIO_CHUNK', samples: new Float32Array(640).fill(0.0001) },
+      });
+    }
+
+    expect(mockExports.tinyasr_session_finish).toHaveBeenCalledTimes(1);
+    expect(mockExports.tinyasr_session_new).toHaveBeenCalledTimes(2);
+    expect(postedMessages.some((m) => m.type === 'TRANSCRIPT_UPDATE' && m.isFinal === true && m.fullText === 'привіт')).toBe(true);
+    expect(logSpy.mock.calls.some((c) => c[0].includes('Endpointing flush'))).toBe(true);
+  });
 });

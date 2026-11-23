@@ -4,6 +4,7 @@ import { render, screen, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import App from '../App.jsx';
 import LiveMetricsBar from './LiveMetricsBar.jsx';
+import AudioVisualizer from './AudioVisualizer.jsx';
 import { LanguageProvider } from '../context/LanguageContext.jsx';
 import { authApi, presentationsApi } from '../api/client.js';
 
@@ -102,6 +103,7 @@ describe('App routing, ProtectedRoute, Navbar, and LiveMetricsBar', () => {
       <LanguageProvider>
         <LiveMetricsBar
           wpm={135}
+          rollingWpm={142}
           pacingZone="optimal"
           wordCount={120}
           pauseCount={1}
@@ -114,6 +116,7 @@ describe('App routing, ProtectedRoute, Navbar, and LiveMetricsBar', () => {
     );
 
     expect(screen.getByTestId('live-wpm-value')).toHaveTextContent('135');
+    expect(screen.getByTestId('rolling-wpm-value')).toHaveTextContent('142');
     expect(screen.getByText('On pace')).toBeInTheDocument();
 
     rerender(
@@ -134,5 +137,69 @@ describe('App routing, ProtectedRoute, Navbar, and LiveMetricsBar', () => {
 
     expect(screen.getByTestId('live-filler-count')).toHaveTextContent('3');
     expect(screen.getByText(/Silent \(2\.3s\)/i)).toBeInTheDocument();
+  });
+
+  it('drives AudioVisualizer bars and RMS label via rAF DOM transform scaleY without React re-renders', () => {
+    const rafQueue = [];
+    const origRaf = globalThis.requestAnimationFrame;
+    const origCancel = globalThis.cancelAnimationFrame;
+    globalThis.requestAnimationFrame = (cb) => {
+      rafQueue.push(cb);
+      return rafQueue.length;
+    };
+    globalThis.cancelAnimationFrame = vi.fn();
+
+    const rmsRef = { current: 0.42 };
+    const barsRef = { current: [0.5, 0.9] };
+
+    const { rerender, unmount } = render(
+      <LanguageProvider>
+        <AudioVisualizer
+          frequencyBars={[0.05, 0.05]}
+          rmsRef={rmsRef}
+          barsRef={barsRef}
+          isRunning={true}
+        />
+      </LanguageProvider>
+    );
+
+    expect(rafQueue.length).toBe(1);
+    rafQueue.shift()(16);
+
+    const bars = screen.getAllByTestId('audio-meter-bar');
+    expect(bars[0].style.transform).toBe('scaleY(0.5)');
+    expect(bars[1].style.transform).toBe('scaleY(0.9)');
+    expect(screen.getByTestId('audio-rms-value')).toHaveTextContent('RMS 0.420');
+
+    rerender(
+      <LanguageProvider>
+        <AudioVisualizer
+          frequencyBars={[0.05, 0.05]}
+          rmsRef={rmsRef}
+          barsRef={barsRef}
+          isRunning={false}
+        />
+      </LanguageProvider>
+    );
+    expect(screen.getByTestId('audio-rms-value')).toHaveTextContent('RMS 0.000');
+    expect(bars[0].style.transform).toBe('scaleY(0.08)');
+
+    // Standalone AudioVisualizer without refs + silent pause color state
+    rerender(
+      <LanguageProvider>
+        <AudioVisualizer
+          frequencyBars={[0.3, 0.6]}
+          rmsLevel={0.123}
+          isRunning={true}
+          isSilentPause={true}
+        />
+      </LanguageProvider>
+    );
+    expect(screen.getByTestId('audio-rms-value')).toHaveTextContent('RMS 0.123');
+    expect(screen.getByText(/Silence detected/i)).toBeInTheDocument();
+
+    unmount();
+    globalThis.requestAnimationFrame = origRaf;
+    globalThis.cancelAnimationFrame = origCancel;
   });
 });

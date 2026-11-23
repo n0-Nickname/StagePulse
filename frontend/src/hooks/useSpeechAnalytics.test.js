@@ -4,6 +4,8 @@ import {
   useSpeechAnalytics,
   computeWordTimestampPauses,
   computeOverallWpm,
+  computeRollingWpm,
+  countNormalizedWords,
   analyzeFillers,
 } from './useSpeechAnalytics.js';
 
@@ -221,7 +223,7 @@ describe('useSpeechAnalytics', () => {
     const lateEngineFactory = () => ({
       init: () =>
         new Promise((res) => {
-          resolveInit = res;
+          if (!resolveInit) resolveInit = res;
         }),
       destroy: destroySpy,
     });
@@ -269,9 +271,9 @@ describe('useSpeechAnalytics', () => {
     let rejectLateInit = null;
     const lateCancelledEngine = () => ({
       init: (opts) => {
-        lateOpts = opts;
+        if (!lateOpts) lateOpts = opts;
         return new Promise((_, rej) => {
-          rejectLateInit = rej;
+          if (!rejectLateInit) rejectLateInit = rej;
         });
       },
       destroy: destroySpy,
@@ -547,6 +549,32 @@ describe('useSpeechAnalytics', () => {
     await flushRafFrame(8200);
     await flushRafFrame(8700);
 
+    // Exercise syllable burst > speechWords branch in speech_api mode
+    const origAnalyser = window.AudioContext.prototype.createAnalyser;
+    let fakeSample = 0.01;
+    window.AudioContext.prototype.createAnalyser = () => ({
+      fftSize: 512,
+      frequencyBinCount: 256,
+      smoothingTimeConstant: 0.75,
+      getFloatTimeDomainData: (arr) => arr.fill(fakeSample),
+      getByteFrequencyData: (arr) => arr.fill(50),
+    });
+    await act(async () => {
+      rerender({ running: false, elapsed: 0, lang: 'uk-UA' });
+    });
+    await act(async () => {
+      rerender({ running: true, elapsed: 0, lang: 'uk-UA' });
+    });
+    await waitFor(() => expect(recInstance).not.toBeNull());
+    fakeSample = 0.01;
+    await flushRafFrame(100);
+    await flushRafFrame(1200); // calibrates low ambient threshold (0.045)
+    fakeSample = 0.005;
+    await flushRafFrame(1300); // arms burst
+    fakeSample = 0.35;
+    await flushRafFrame(1500); // triggers syllable burst while speechWords = 0
+    window.AudioContext.prototype.createAnalyser = origAnalyser;
+
     await act(async () => {
       recInstance.onend();
     });
@@ -658,5 +686,262 @@ describe('useSpeechAnalytics', () => {
     expect(r2.current.engineError).toBe('Runtime WASM trap');
     u2();
     vi.unstubAllEnvs();
+  });
+
+  it('counts normalized words from partial fullText, excludes pre-speech dead air from WPM, and computes rolling 15s WPM', async () => {
+    expect(countNormalizedWords('')).toBe(0);
+    expect(countNormalizedWords('   ')).toBe(0);
+    expect(countNormalizedWords('  Hello, world — test-case!  ')).toBe(4);
+
+    expect(computeRollingWpm([], 10, 0)).toBe(0);
+    expect(computeRollingWpm([{ t: 2, words: 5 }], 3, 2)).toBe(0); // < 3s window
+    expect(
+      computeRollingWpm(
+        [
+          { t: 10, words: 5 },
+          { t: 25, words: 5 },
+        ],
+        30,
+        10
+      )
+    ).toBe(0); // 0 deltaWords in rolling window
+    // 10s..20s window => 10s, 20 words => 120 wpm
+    expect(
+      computeRollingWpm(
+        [
+          { t: 10, words: 2 },
+          { t: 20, words: 20 },
+        ],
+        20,
+        10
+      )
+    ).toBe(120);
+    // Sliding 15s window at t=35s (baseline at t=20s had 20 words, t=35s has 50 => 30 words / 15s = 120 wpm)
+    expect(
+      computeRollingWpm(
+        [
+          { t: 10, words: 2 },
+          { t: 20, words: 20 },
+          { t: 35, words: 50 },
+        ],
+        35,
+        10
+      )
+    ).toBe(120);
+
+    let callbacks = null;
+    const engineFactory = () => ({
+      init: vi.fn(async (opts) => {
+        callbacks = opts;
+      }),
+      pushAudio: vi.fn(),
+      destroy: vi.fn(),
+    });
+    const micCaptureFactory = vi.fn(async () => ({ stop: vi.fn() }));
+
+    const { result, rerender, unmount } = renderHook(
+      ({ running, elapsed }) =>
+        useSpeechAnalytics(running, elapsed, 'en-US', { engineFactory, micCaptureFactory }),
+      { initialProps: { running: true, elapsed: 0 } }
+    );
+    await waitFor(() => expect(callbacks).not.toBeNull());
+
+    // 10s of pre-speech dead air
+    await act(async () => {
+      rerender({ running: true, elapsed: 10 });
+    });
+    expect(result.current.wpm).toBe(0);
+
+    // First speech detected at elapsed=10s via partial fullText (committed words still empty)
+    act(() => {
+      callbacks.onTranscript({
+        words: [],
+        fullText: 'One two three four five',
+        isFinal: false,
+      });
+    });
+    expect(result.current.wordCount).toBe(5);
+    expect(result.current.words).toEqual([]);
+
+    // At elapsed=20s (10s of active speaking, excluding 10s dead air), 20 words -> 120 WPM
+    await act(async () => {
+      rerender({ running: true, elapsed: 20 });
+    });
+    act(() => {
+      callbacks.onTranscript({
+        words: new Array(20).fill(0).map((_, i) => ({ text: `w${i}`, startMs: 10000 + i * 400, endMs: 10300 + i * 400 })),
+        fullText: new Array(20).fill('word').join(' '),
+        isFinal: true,
+      });
+    });
+    expect(result.current.wpm).toBe(120);
+    expect(result.current.rollingWpm).toBe(120);
+    unmount();
+  });
+
+  it('coalesces rapid partial TRANSCRIPT_UPDATE messages (~135ms) and pre-warms WASM + CacheStorage on mount', async () => {
+    vi.useFakeTimers();
+    let callbacks = null;
+    const initSpy = vi.fn(async (opts) => {
+      callbacks = opts;
+    });
+    const engineFactory = vi.fn(() => ({
+      init: initSpy,
+      pushAudio: vi.fn(),
+      destroy: vi.fn(),
+    }));
+    const micCaptureFactory = vi.fn(async () => ({ stop: vi.fn() }));
+
+    // Mount with running=false -> triggers mount-time WASM warmup & CacheStorage check
+    const { result, rerender, unmount } = renderHook(
+      ({ running, elapsed }) =>
+        useSpeechAnalytics(running, elapsed, 'uk-UA', { engineFactory, micCaptureFactory }),
+      { initialProps: { running: false, elapsed: 0 } }
+    );
+
+    await vi.waitFor(() => expect(initSpy).toHaveBeenCalledTimes(1));
+    expect(engineFactory).toHaveBeenCalledTimes(1);
+
+    // Starting rehearsal reuses warmed engine without second init
+    await act(async () => {
+      rerender({ running: true, elapsed: 0 });
+    });
+    await vi.waitFor(() => expect(micCaptureFactory).toHaveBeenCalledTimes(1));
+    expect(initSpy).toHaveBeenCalledTimes(1);
+
+    // Leading partial fires immediately, rapid subsequent partials within 135ms coalesce
+    act(() => {
+      callbacks.onTranscript({ words: [], fullText: 'Перше', isFinal: false });
+    });
+    expect(result.current.liveTranscript).toBe('Перше');
+
+    act(() => {
+      callbacks.onTranscript({ words: [], fullText: 'Перше друге', isFinal: false });
+      callbacks.onTranscript({ words: [], fullText: 'Перше друге третє', isFinal: false });
+    });
+    // Still 'Перше' before throttle window elapses
+    expect(result.current.liveTranscript).toBe('Перше');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
+    });
+    expect(result.current.liveTranscript).toBe('Перше друге третє');
+    expect(result.current.wordCount).toBe(3);
+
+    // Final commit arriving while a trailing partial timer is pending clears the timer immediately
+    act(() => {
+      callbacks.onTranscript({ words: [], fullText: 'Перше друге третє чотири', isFinal: false });
+      callbacks.onTranscript({
+        words: [{ text: 'final', startMs: 0, endMs: 200 }],
+        fullText: 'final',
+        isFinal: true,
+      });
+    });
+    expect(result.current.liveTranscript).toBe('final');
+    expect(result.current.wordCount).toBe(1);
+
+    // Trigger pending partial timer right before unmount/stop to verify timer cleanup
+    act(() => {
+      callbacks.onTranscript({ words: [], fullText: 'final один', isFinal: false });
+      callbacks.onTranscript({ words: [], fullText: 'final один два', isFinal: false });
+    });
+
+    vi.useRealTimers();
+    unmount();
+  });
+
+  it('covers warmup cache edge cases, language mismatch invalidation, live callback handoff, and unmount cleanup', async () => {
+    // 1. Missing caches.open + unmount while warmed engine is still idle
+    const origCaches = globalThis.caches;
+    Object.defineProperty(globalThis, 'caches', { value: undefined, configurable: true });
+
+    let warmupOpts = null;
+    let resolveWarmup = null;
+    const destroySpy = vi.fn();
+    const engineFactory = vi.fn(() => ({
+      init: vi.fn((opts) => {
+        warmupOpts = opts;
+        return new Promise((res) => {
+          resolveWarmup = res;
+        });
+      }),
+      pushAudio: vi.fn(),
+      destroy: destroySpy,
+    }));
+
+    const { rerender, unmount } = renderHook(
+      ({ running, lang }) => useSpeechAnalytics(running, 0, lang, { engineFactory }),
+      { initialProps: { running: false, lang: 'uk-UA' } }
+    );
+    await waitFor(() => expect(warmupOpts).not.toBeNull());
+
+    // Unmount before starting -> destroys idle warmed engine
+    unmount();
+    expect(destroySpy).toHaveBeenCalledTimes(1);
+
+    // 2. caches.open rejects + language switch invalidates warmed engine + cancellation during reused init
+    Object.defineProperty(globalThis, 'caches', {
+      value: { open: vi.fn().mockRejectedValue(new Error('Storage quota')) },
+      configurable: true,
+    });
+    const h2 = renderHook(
+      ({ running, lang }) =>
+        useSpeechAnalytics(running, 0, lang, {
+          engineFactory,
+          micCaptureFactory: vi.fn(async () => ({ stop: vi.fn() })),
+        }),
+      { initialProps: { running: false, lang: 'uk-UA' } }
+    );
+    await waitFor(() => expect(engineFactory).toHaveBeenCalledTimes(2));
+
+    // Switch to running with different language ('en-US') -> destroys 'uk' warmed adapter and creates fresh 'en' adapter
+    await act(async () => {
+      h2.rerender({ running: true, lang: 'en-US' });
+    });
+    await waitFor(() => expect(engineFactory).toHaveBeenCalledTimes(3));
+    expect(destroySpy).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      resolveWarmup();
+    });
+    h2.unmount();
+
+    // 3. Reusing pending warmed engine: onProgress/onError fire after Start, then stop cancels before init resolves
+    let pendingOpts = null;
+    let resolvePending = null;
+    const pendingFactory = vi.fn(() => ({
+      init: vi.fn((opts) => {
+        pendingOpts = opts;
+        return new Promise((res) => {
+          resolvePending = res;
+        });
+      }),
+      destroy: destroySpy,
+    }));
+    const h3 = renderHook(
+      ({ running }) => useSpeechAnalytics(running, 0, 'en-US', { engineFactory: pendingFactory }),
+      { initialProps: { running: false } }
+    );
+    await waitFor(() => expect(pendingOpts).not.toBeNull());
+
+    await act(async () => {
+      h3.rerender({ running: true });
+    });
+    act(() => {
+      pendingOpts.onProgress({ percent: 80, cached: false });
+      pendingOpts.onError(new Error('Warmup error handed off'));
+    });
+    expect(h3.result.current.modelProgress.percent).toBe(80);
+    expect(h3.result.current.engineError).toBe('Warmup error handed off');
+
+    // Cancel while warmed initPromise is still awaiting
+    await act(async () => {
+      h3.rerender({ running: false });
+    });
+    await act(async () => {
+      resolvePending();
+    });
+    h3.unmount();
+
+    Object.defineProperty(globalThis, 'caches', { value: origCaches, configurable: true });
   });
 });

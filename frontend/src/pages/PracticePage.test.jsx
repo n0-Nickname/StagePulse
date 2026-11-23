@@ -176,4 +176,37 @@ describe('PracticePage', () => {
 
     delete globalThis.Worker;
   });
+
+  it('pre-warms WASM engine and verifies CacheStorage on PracticePage mount before Start is clicked', async () => {
+    const postMessages = [];
+    globalThis.Worker = class {
+      constructor() {
+        this.onmessage = null;
+        this.onerror = null;
+        this.terminate = vi.fn();
+        this.postMessage = vi.fn((msg) => {
+          postMessages.push(msg);
+          if (msg.type === 'INIT') {
+            queueMicrotask(() => {
+              this.onmessage?.({ data: { type: 'MODEL_PROGRESS', percent: 100, cached: true } });
+              this.onmessage?.({ data: { type: 'MODEL_READY' } });
+            });
+          }
+        });
+      }
+    };
+
+    render(
+      <MemoryRouter initialEntries={['/practice']}>
+        <LanguageProvider>
+          <PracticePage />
+        </LanguageProvider>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(postMessages.some((m) => m.type === 'INIT')).toBe(true));
+    expect(screen.getByTestId('wasm-progress-bar')).toHaveAttribute('aria-valuenow', '100');
+
+    delete globalThis.Worker;
+  });
 });
