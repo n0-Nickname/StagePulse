@@ -944,4 +944,90 @@ describe('useSpeechAnalytics', () => {
 
     Object.defineProperty(globalThis, 'caches', { value: origCaches, configurable: true });
   });
+
+  it('overrides false silence on TRANSCRIPT_UPDATE and uses adaptive post-AGC RMS in WASM pipeline', async () => {
+    vi.useFakeTimers();
+    let callbacks = null;
+    let captureOpts = null;
+    const engineFactory = () => ({
+      init: vi.fn(async (opts) => {
+        callbacks = opts;
+      }),
+      pushAudio: vi.fn(),
+      destroy: vi.fn(),
+    });
+    const micCaptureFactory = vi.fn(async (opts) => {
+      captureOpts = opts;
+      return { stop: vi.fn() };
+    });
+
+    const { result, rerender, unmount } = renderHook(
+      ({ running, elapsed }) =>
+        useSpeechAnalytics(running, elapsed, 'uk-UA', { engineFactory, micCaptureFactory }),
+      { initialProps: { running: true, elapsed: 0 } }
+    );
+    await vi.waitFor(() => expect(captureOpts).not.toBeNull());
+
+    // Simulate low PipeWire room noise floor (0.004) for 2s -> triggers RMS silence
+    act(() => {
+      captureOpts.onRms(0.004);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600);
+    });
+    act(() => {
+      captureOpts.onRms(0.004);
+    });
+    expect(result.current.isSilentPause).toBe(true);
+    expect(result.current.isSpeaking).toBe(false);
+    expect(result.current.pauseCount).toBe(1);
+
+    // 1. ASR Activity Override: TRANSCRIPT_UPDATE with partial speech immediately clears silence & marks isSpeaking=true
+    await act(async () => {
+      rerender({ running: true, elapsed: 5 });
+    });
+    act(() => {
+      callbacks.onTranscript({
+        words: [{ text: 'Початок', startMs: 100, endMs: 500 }],
+        fullText: 'Початок активного мовлення без паузи',
+        isFinal: false,
+      });
+    });
+    expect(result.current.isSpeaking).toBe(true);
+    expect(result.current.isSilentPause).toBe(false);
+    expect(result.current.currentSilenceSec).toBe(0);
+    expect(result.current.pauseCount).toBe(0);
+
+    // 2. After an isFinal commit, post-AGC quiet PipeWire voice RMS (0.025 over 0.004 noise floor) prevents false silence
+    act(() => {
+      callbacks.onTranscript({
+        words: [{ text: 'Початок', startMs: 100, endMs: 500 }],
+        fullText: 'Початок',
+        isFinal: true,
+      });
+      captureOpts.onRms(0.025);
+    });
+    expect(result.current.isSpeaking).toBe(true);
+    expect(result.current.isSilentPause).toBe(false);
+    expect(result.current.pauseCount).toBe(0);
+
+    // 3. Genuine post-commit silence (>= 1500ms at 0.002 RMS with no new ASR updates) marks silent pause
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600);
+    });
+    act(() => {
+      captureOpts.onRms(0.002);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600);
+    });
+    act(() => {
+      captureOpts.onRms(0.002);
+    });
+    expect(result.current.isSpeaking).toBe(false);
+    expect(result.current.isSilentPause).toBe(true);
+
+    vi.useRealTimers();
+    unmount();
+  });
 });

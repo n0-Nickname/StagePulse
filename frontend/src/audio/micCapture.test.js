@@ -380,6 +380,20 @@ describe('audio/micCapture.js', () => {
       }
     }
 
+    // Ultra-quiet PipeWire mic speech (0.0008 RMS) is boosted above silence threshold
+    const pipewireProcess = createAgcProcessor();
+    const quietPipewire = new Float32Array(640);
+    for (let i = 0; i < quietPipewire.length; i += 1) {
+      quietPipewire[i] = 0.0012 * Math.sin(i * 0.1);
+    }
+    for (let pass = 0; pass < 8; pass += 1) {
+      const frame = new Float32Array(quietPipewire);
+      pipewireProcess(frame);
+      if (pass === 7) {
+        expect(computeRms(frame)).toBeGreaterThan(0.015);
+      }
+    }
+
     // Extreme values stay softly limited inside [-1, 1] and non-finite -> 0
     const extreme = new Float32Array([50, -50, Infinity, -Infinity]);
     processAgc(extreme);
