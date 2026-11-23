@@ -1,6 +1,6 @@
 export const onRequestGet: PagesFunction = async () => {
   const res = await fetch(
-    "https://github.com/n0-Nickname/presentation-timer/releases/download/v1.0.0-models/en-ru-uk.tzf.gz"
+    "https://github.com/n0-Nickname/stagepulse/releases/download/v1.0.0-models/en-ru-uk.tzf.gz"
   );
   return new Response(res.body, {
     headers: {
