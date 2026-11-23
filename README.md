@@ -1,37 +1,52 @@
-# StagePulse — Presentation Timer & Neural Speech Telemetry
+# StagePulse
 
-A full-stack presentation rehearsal studio featuring a client-side Rust/WASM neural speech recognition pipeline (`dkaraush/tinyasr`), 16kHz `AudioWorklet` capture, timestamp-accurate pause detection, live WPM & filler-word telemetry, and a 3-spin Gacha Slot Machine PRO unlock.
+**Zero-cloud-latency presentation timer & live speech telemetry.**  
+Client-side Rust/WASM neural ASR (`dkaraush/tinyasr`) + Silero VAD running off the main thread via `AudioWorklet`, Web Workers, and `SharedArrayBuffer` (`Atomics` MT-WASM with ST fallback).
 
-## Project Structure
+---
 
-- `backend/` — FastAPI + SQLAlchemy 2.0 + SQLite REST API (`/api/auth`, `/api/slots`, `/api/presentations`)
-- `frontend/` — React 18 + Vite + Tailwind CSS + Web Worker Rust/WASM ASR adapter
+## Architecture
 
-## Quick Start
-
-### Backend
-```bash
-cd backend
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+```text
+Mic ──▶ AudioWorklet (16kHz + AGC) ──▶ WASM Worker (Silero VAD + tinyasr) ──▶ Telemetry UI
+                                              │                                     │
+                                      SharedArrayBuffer                    useSyncExternalStore
+                                     (MT-WASM / ST fallback)              + rAF Direct-DOM 60fps
 ```
 
-### Frontend
+- **Off-Main-Thread ASR**: 5-tap anti-aliased 16kHz resampling, AGC soft-limiter, and `tinyasr-mt.wasm` (`COOP`/`COEP` isolated) with `CacheStorage` model persistence.
+- **60fps Telemetry**: `rAF` direct-DOM timer & 24-bar audio meter, 120ms coalesced `speechStore` slices, and `React.memo` append-only transcript blocks.
+- **Deterministic Speech Metrics**: Live WPM (session + 15s rolling), word-timestamp pause detection (`≥1.5s`), and **PRO** custom filler-word dictionary (`GET/PUT /api/v1/filler-dictionary`).
+- **Backend**: FastAPI + async SQLAlchemy 2.0 (`aiosqlite` dev / `asyncpg` Neon Postgres prod) + Alembic + 3-spin Milestone PRO unlock.
+
+---
+
+## Quickstart
+
 ```bash
-cd frontend
-npm install
-npm run dev
+# Development (Postgres + one-shot Alembic migrate + hot-reload backend & Vite)
+cp .env.example .env
+docker compose -f docker-compose.dev.yml up --build
+
+# Production (hardened multi-stage backend + Nginx with COOP/COEP & gzip)
+docker compose -f docker-compose.prod.yml up -d --build
 ```
 
-Vite dev and preview servers include `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` headers required for `SharedArrayBuffer` / WASM threads.
+---
 
-## Testing & Build
+## Verification
 
-- Backend tests: `pytest backend/tests/`
-- Frontend coverage: `npm --prefix frontend run test:coverage`
-- Frontend build: `npm --prefix frontend run build`
+```bash
+# Frontend (Vitest + V8 coverage: 20 files, 89 tests, 100% statements/lines)
+npm --prefix frontend run test:coverage
+
+# Backend (Pytest + Ruff + Pyrefly: 100 tests)
+backend/.venv/bin/pytest backend/tests --tb=short -q
+```
+
+---
 
 ## License & Attribution
 
-- Licensed under the **GNU General Public License v3.0** (see [`LICENSE`](LICENSE)).
-- Client-side Rust/WASM speech recognition powered by **[dkaraush/tinyasr](https://github.com/dkaraush/tinyasr)** (`en-ru-uk` streaming model weights, GPL-3.0).
+Licensed under **GPL-3.0** (see [LICENSE](LICENSE)).  
+Powered by [`dkaraush/tinyasr`](https://github.com/dkaraush/tinyasr) (Rust/WASM neural speech recognition & Silero VAD).
