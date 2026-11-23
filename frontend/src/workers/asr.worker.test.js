@@ -194,7 +194,7 @@ describe('workers/asr.worker.js', () => {
 
     const wasmMagic = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
     const enc = new TextEncoder();
-    const fakeMem = new ArrayBuffer(4096);
+    const fakeMem = new ArrayBuffer(4 * 1024 * 1024);
     const memView = new Uint8Array(fakeMem);
     const pushJson = JSON.stringify([
       { type: 'commit', words: [{ text: 'hello', start: 0.1, end: 0.5 }] },
@@ -258,30 +258,156 @@ describe('workers/asr.worker.js', () => {
     const logs = logSpy.mock.calls.map((c) => c[0]);
     expect(logs.some((l) => l.includes('tinyasr_load') && l.includes('101'))).toBe(true);
     expect(logs.some((l) => l.includes('tinyasr_session_new') && l.includes('202'))).toBe(true);
+    expect(logs.some((l) => l.includes('"wasmBinary":"tinyasr.wasm"'))).toBe(true);
 
-    // Push audio with out-of-range sample -> clamped and triggers push JSON log + transcript
+    // Verify strict single-language lock ('en' only, never 'en,uk')
+    const [langsPtr, startLangPtr] = [
+      mockExports.tinyasr_session_new.mock.calls[0][1],
+      mockExports.tinyasr_session_new.mock.calls[0][2],
+    ];
+    const readStr = (p) => {
+      let end = p;
+      while (memView[end] !== 0) end += 1;
+      return new TextDecoder().decode(memView.subarray(p, end));
+    };
+    expect(readStr(langsPtr)).toBe('en');
+    expect(readStr(startLangPtr)).toBe('en');
+
+    // Pre-allocated PCM buffer: pushing multiple <=1024-sample chunks must NOT call tinyasr_alloc again
+    const allocCallsAfterInit = mockExports.tinyasr_alloc.mock.calls.length;
     await globalThis.self.onmessage({
       data: { type: 'AUDIO_CHUNK', samples: new Float32Array([1.5, -1.5, 0.2]) },
     });
-    const pushedSlice = new Float32Array(
-      fakeMem,
-      mockExports.tinyasr_alloc.mock.results.at(-1).value,
-      3
-    );
-    expect(Array.from(pushedSlice)).toEqual([1, -1, expect.closeTo(0.2, 5)]);
+    await globalThis.self.onmessage({
+      data: { type: 'AUDIO_CHUNK', samples: new Float32Array([0.1, 0.2, 0.3]) },
+    });
+    expect(mockExports.tinyasr_alloc.mock.calls.length).toBe(allocCallsAfterInit);
+
+    const lastPushPtr = mockExports.tinyasr_session_push.mock.calls.at(-1)[1];
+    const pushedSlice = new Float32Array(fakeMem, lastPushPtr, 3);
+    expect(Array.from(pushedSlice)).toEqual([
+      expect.closeTo(0.1, 5),
+      expect.closeTo(0.2, 5),
+      expect.closeTo(0.3, 5),
+    ]);
     expect(postedMessages.some((m) => m.type === 'TRANSCRIPT_UPDATE' && m.fullText === 'hello')).toBe(
       true
     );
     expect(logSpy.mock.calls.some((c) => c[0].includes('tinyasr_session_push raw events'))).toBe(
       true
     );
+    expect(logSpy.mock.calls.some((c) => c[0].includes('"rtf":'))).toBe(true);
 
-    // Trigger ENGINE_ERROR when tinyasr_load returns 0
+    // Oversized chunk (>4096 bytes) resizes pre-allocated buffer cleanly
+    await globalThis.self.onmessage({
+      data: { type: 'AUDIO_CHUNK', samples: new Float32Array(1200).fill(0.05) },
+    });
+    expect(mockExports.tinyasr_alloc.mock.calls.length).toBe(allocCallsAfterInit + 1);
+
+    // FINISH frees session and pre-allocated PCM buffer
+    await globalThis.self.onmessage({ data: { type: 'FINISH' } });
+    expect(mockExports.tinyasr_session_free).toHaveBeenCalledWith(202);
+
+    // Trigger ENGINE_ERROR when tinyasr_load returns 0 and verify strict 'uk' language lock
     mockExports.tinyasr_load.mockReturnValueOnce(0);
     await globalThis.self.onmessage({
-      data: { type: 'INIT', lang: 'uk', wasmUrl: '/wasm/tinyasr.wasm' },
+      data: { type: 'INIT', lang: 'uk-UA', wasmUrl: '/wasm/tinyasr.wasm' },
     });
     expect(errorSpy).toHaveBeenCalled();
     expect(postedMessages.some((m) => m.type === 'ENGINE_ERROR')).toBe(true);
+  });
+
+  it('spawns MT helper workers and calls tinyasr_set_parallel_for when crossOriginIsolated + Worker + compile exist', async () => {
+    vi.stubEnv('VITE_APP_ENV', 'prod');
+    vi.stubEnv('VITE_LOG_LEVEL', 'debug');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    globalThis.self.crossOriginIsolated = true;
+    globalThis.SharedArrayBuffer = ArrayBuffer;
+    Object.defineProperty(navigator, 'hardwareConcurrency', { value: 4, configurable: true });
+
+    const store = new Map();
+    Object.defineProperty(globalThis, 'caches', {
+      value: {
+        open: vi.fn(async () => ({
+          match: async (k) => store.get(k),
+          put: async (k, v) => store.set(k, v),
+          delete: async (k) => store.delete(k),
+        })),
+      },
+      configurable: true,
+    });
+
+    const wasmMagic = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+    globalThis.fetch = vi.fn(async (url) => {
+      if (url.endsWith('.wasm')) {
+        return makeResponse(wasmMagic, { headers: { 'content-length': '8' } });
+      }
+      return makeResponse(new Uint8Array([1, 2, 3]), { headers: { 'content-length': '3' } });
+    });
+
+    const fakeMem = new ArrayBuffer(4 * 1024 * 1024);
+    let offset = 64;
+    const setParallelForSpy = vi.fn();
+    const mockMtExports = {
+      __tls_size: { value: 16 },
+      __wasm_init_tls: vi.fn(),
+      tinyasr_alloc: vi.fn((len) => {
+        const ptr = offset;
+        offset += (len + 11) & ~3;
+        return ptr;
+      }),
+      tinyasr_dealloc: vi.fn(),
+      tinyasr_load: vi.fn(() => 555),
+      tinyasr_set_parallel_for: setParallelForSpy,
+      tinyasr_web_parallel_for: vi.fn(() => 99),
+      tinyasr_web_task: vi.fn(),
+      tinyasr_clock: vi.fn(() => 1.0),
+      tinyasr_session_new: vi.fn(() => 777),
+      tinyasr_session_push: vi.fn(() => 0),
+      tinyasr_session_finish: vi.fn(() => 0),
+      tinyasr_session_free: vi.fn(),
+    };
+
+    const helpers = [];
+    const origWorker = globalThis.Worker;
+    globalThis.Worker = class {
+      constructor() {
+        this.onmessage = null;
+        this.terminate = vi.fn();
+        this.postMessage = vi.fn(() => {
+          queueMicrotask(() => this.onmessage?.({ data: 'up' }));
+        });
+        helpers.push(this);
+      }
+    };
+    const createUrlSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:helper');
+    const revokeUrlSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+
+    globalThis.WebAssembly = {
+      Memory: class {
+        constructor() {
+          this.buffer = fakeMem;
+        }
+      },
+      compile: vi.fn(async () => ({ compiled: true })),
+      instantiate: vi.fn(async () => ({ instance: { exports: mockMtExports } })),
+    };
+
+    await import('./asr.worker.js');
+    await globalThis.self.onmessage({ data: { type: 'INIT', lang: 'uk' } });
+
+    expect(helpers).toHaveLength(3); // min(4, 4) - 1 = 3 helpers
+    expect(setParallelForSpy).toHaveBeenCalledWith(555, 99, 0, 4);
+    expect(
+      logSpy.mock.calls.some(
+        (c) => c[0].includes('"wasmBinary":"tinyasr-mt.wasm"') && c[0].includes('"threads":4')
+      )
+    ).toBe(true);
+
+    await globalThis.self.onmessage({ data: { type: 'FINISH' } });
+    globalThis.Worker = origWorker;
+    createUrlSpy.mockRestore();
+    revokeUrlSpy.mockRestore();
   });
 });

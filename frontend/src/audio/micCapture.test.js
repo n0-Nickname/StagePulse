@@ -4,6 +4,7 @@ import {
   CHUNK_SAMPLES,
   computeRms,
   computePeak,
+  createAgcProcessor,
   createResampler,
   startMicCapture,
 } from './micCapture.js';
@@ -289,11 +290,13 @@ describe('audio/micCapture.js', () => {
     const chunks = [];
     const push = createResampler(48000, 4, (c) => chunks.push(c));
     push(new Float32Array(20).fill(2.5));
-    expect(chunks.length).toBeGreaterThanOrEqual(1);
+    push(new Float32Array(20).fill(-2.5));
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
     for (const s of chunks[0]) {
       expect(s).toBeLessThanOrEqual(1);
       expect(s).toBeGreaterThanOrEqual(-1);
     }
+    expect(chunks.at(-1)[0]).toBeGreaterThanOrEqual(-1);
 
     const stopTrack = vi.fn();
     vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockResolvedValueOnce({
@@ -303,8 +306,11 @@ describe('audio/micCapture.js', () => {
     const origAC = globalThis.AudioContext;
     globalThis.AudioContext = class {
       constructor() {
-        this.state = 'running';
+        this.state = 'suspended';
         this.sampleRate = 48000;
+        this.resume = vi.fn().mockImplementation(async () => {
+          this.state = 'running';
+        });
         this.audioWorklet = { addModule: vi.fn().mockResolvedValue(undefined) };
       }
       createMediaStreamSource() {
@@ -325,7 +331,13 @@ describe('audio/micCapture.js', () => {
     const received = [];
     const capture = await startMicCapture({ onChunk: (c) => received.push(c), silentCheckMs: 5000 });
     workletNode.port.onmessage({ data: new Float32Array([1.9, -1.7, Number.NaN, 0.25]) });
-    expect(Array.from(received[0])).toEqual([1, -1, 0, 0.25]);
+    expect(received[0].length).toBe(4);
+    expect(received[0][0]).toBeLessThanOrEqual(1);
+    expect(received[0][0]).toBeGreaterThan(0.9);
+    expect(received[0][1]).toBeGreaterThanOrEqual(-1);
+    expect(received[0][1]).toBeLessThan(-0.9);
+    expect(received[0][2]).toBe(0);
+    expect(received[0][3]).toBeCloseTo(Math.tanh(0.25), 5);
 
     const parsedLogs = logSpy.mock.calls.map((c) => JSON.parse(c[0]));
     expect(
@@ -342,5 +354,40 @@ describe('audio/micCapture.js', () => {
     capture.stop();
     globalThis.AudioContext = origAC;
     vi.unstubAllEnvs();
+  });
+
+  it('applies lightweight AGC boost for quiet speech and soft-limiter without boosting silent noise floor', () => {
+    const processAgc = createAgcProcessor();
+
+    // Near-zero noise floor (< 0.001) is NOT boosted so silent-mic fallback remains accurate
+    const silence = new Float32Array(640).fill(0.0002);
+    processAgc(silence);
+    expect(computePeak(silence)).toBeCloseTo(0.0002, 5);
+
+    // Quiet speech (0.01 RMS) gets smoothly boosted toward target RMS without clipping
+    const quiet = new Float32Array(640);
+    for (let i = 0; i < quiet.length; i += 1) {
+      quiet[i] = 0.01 * Math.sin(i * 0.1);
+    }
+    const beforeRms = computeRms(quiet);
+    for (let pass = 0; pass < 5; pass += 1) {
+      const frame = new Float32Array(quiet);
+      processAgc(frame);
+      if (pass === 4) {
+        const afterRms = computeRms(frame);
+        expect(afterRms).toBeGreaterThan(beforeRms * 2);
+        expect(computePeak(frame)).toBeLessThan(1);
+      }
+    }
+
+    // Extreme values stay softly limited inside [-1, 1] and non-finite -> 0
+    const extreme = new Float32Array([50, -50, Infinity, -Infinity]);
+    processAgc(extreme);
+    expect(extreme[0]).toBeLessThanOrEqual(1);
+    expect(extreme[0]).toBeGreaterThan(0.99);
+    expect(extreme[1]).toBeGreaterThanOrEqual(-1);
+    expect(extreme[1]).toBeLessThan(-0.99);
+    expect(extreme[2]).toBe(0);
+    expect(extreme[3]).toBe(0);
   });
 });
