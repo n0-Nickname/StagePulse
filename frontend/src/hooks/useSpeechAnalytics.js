@@ -6,12 +6,8 @@ import { createLogger } from '../utils/logger.js';
 const logger = createLogger('ASR:Analytics');
 
 const DEFAULT_SILENCE_THRESHOLD = 0.018;
-const MIN_SPEECH_THRESHOLD = 0.015;
 const PAUSE_DURATION_THRESHOLD_MS = 1500;
-const SPEAKING_TO_SILENT_HYSTERESIS_MS = 350;
-const SILENT_TO_SPEAKING_HYSTERESIS_MS = 120;
-const ASR_VETO_WINDOW_MS = 800;
-const NOISE_FLOOR_EMA_ALPHA = 0.08;
+const LIVE_PAUSE_POLL_MS = 200;
 const SPEECH_BURST_DIP_FACTOR = 1.22;
 const SPEECH_BURST_PEAK_FACTOR = 1.95;
 const SYLLABLE_COOLDOWN_MS = 140;
@@ -35,6 +31,38 @@ export function normalizeWordTimestamps(words = []) {
   }));
 }
 
+export function computeCommittedWordPauses(
+  words = [],
+  thresholdMs = PAUSE_DURATION_THRESHOLD_MS
+) {
+  if (!Array.isArray(words) || words.length === 0) {
+    return { pauseCount: 0, totalPauseMs: 0, gaps: [] };
+  }
+
+  const normalized = normalizeWordTimestamps(words);
+  let pauseCount = 0;
+  let totalPauseMs = 0;
+  const gaps = [];
+
+  for (let i = 1; i < normalized.length; i += 1) {
+    const prev = normalized[i - 1];
+    const curr = normalized[i];
+    if (prev.endMs <= 0) continue;
+    const gapMs = curr.startMs - prev.endMs;
+    if (gapMs >= thresholdMs) {
+      pauseCount += 1;
+      totalPauseMs += gapMs;
+      gaps.push({
+        prevWord: prev.text || '',
+        nextWord: curr.text || '',
+        gapMs,
+      });
+    }
+  }
+
+  return { pauseCount, totalPauseMs, gaps };
+}
+
 export function computeWordTimestampPauses(
   words = [],
   currentElapsedMs = 0,
@@ -50,16 +78,9 @@ export function computeWordTimestampPauses(
   }
 
   const normalized = normalizeWordTimestamps(words);
-  let pauseCount = 0;
-  let totalPauseMs = 0;
-
-  for (let i = 1; i < normalized.length; i += 1) {
-    const gapMs = normalized[i].startMs - normalized[i - 1].endMs;
-    if (gapMs >= thresholdMs) {
-      pauseCount += 1;
-      totalPauseMs += gapMs;
-    }
-  }
+  const committed = computeCommittedWordPauses(normalized, thresholdMs);
+  let pauseCount = committed.pauseCount;
+  let totalPauseMs = committed.totalPauseMs;
 
   const lastWord = normalized[normalized.length - 1];
   const trailingSilenceMs = Math.max(0, currentElapsedMs - lastWord.endMs);
@@ -184,11 +205,8 @@ export function useSpeechAnalytics(
   const [frequencyBars, setFrequencyBars] = useState(() => new Array(BAR_COUNT).fill(0.05));
   const [wordCount, setWordCount] = useState(0);
   const [words, setWords] = useState([]);
-  const [pauseCount, setPauseCount] = useState(0);
-  const [totalPauseSec, setTotalPauseSec] = useState(0);
-  const [isSilentPause, setIsSilentPause] = useState(false);
+  const [livePauseMs, setLivePauseMs] = useState(0);
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [currentSilenceSec, setCurrentSilenceSec] = useState(0);
   const [estimationMethod, setEstimationMethod] = useState('speech_api');
   const [silenceThreshold, setSilenceThreshold] = useState(DEFAULT_SILENCE_THRESHOLD);
   const [isSimulatedMic, setIsSimulatedMic] = useState(false);
@@ -217,17 +235,15 @@ export function useSpeechAnalytics(
   const firstSpeechSecRef = useRef(null);
   const wordSamplesRef = useRef([]);
 
-  // Transcript throttle, ASR 800ms veto, RMS hysteresis & noiseFloor EMA refs
+  // Transcript throttle, live active pause timer & warmup refs
   const transcriptTimerRef = useRef(null);
   const pendingTranscriptRef = useRef(null);
   const lastTranscriptFlushMsRef = useRef(null);
-  const lastAsrActivityWallMsRef = useRef(null);
-  const lastAsrTextRef = useRef('');
-  const lastCommittedCountRef = useRef(0);
-  const speechStateRef = useRef('speaking');
-  const belowThresholdSinceMsRef = useRef(null);
-  const aboveThresholdSinceMsRef = useRef(null);
-  const noiseFloorRef = useRef(null);
+  const lastWordActivityAtRef = useRef(null);
+  const lastFullTextWordCountRef = useRef(0);
+  const lastFullTextValueRef = useRef('');
+  const hasPartialStreamingRef = useRef(false);
+  const loggedGapCountRef = useRef(0);
   const warmedEngineRef = useRef(null);
   const liveCallbacksRef = useRef({
     onProgress: null,
@@ -252,11 +268,6 @@ export function useSpeechAnalytics(
   const recognitionRef = useRef(null);
   const asrEngineRef = useRef(null);
   const micCaptureHandleRef = useRef(null);
-
-  const silenceStartMsRef = useRef(null);
-  const lastFrameMsRef = useRef(null);
-  const totalPauseSecRef = useRef(0);
-  const pauseCountRef = useRef(0);
 
   // Speech & Syllable Burst counters
   const finalizedWordsRef = useRef(0);
@@ -358,36 +369,15 @@ export function useSpeechAnalytics(
       }
       audioCtxRef.current = null;
     }
-    if (speechStateRef.current === 'silent' && silenceStartMsRef.current !== null) {
-      const pauseDurationMs = Math.max(0, performance.now() - silenceStartMsRef.current);
-      if (pauseDurationMs >= PAUSE_DURATION_THRESHOLD_MS) {
-        pauseCountRef.current += 1;
-        totalPauseSecRef.current += pauseDurationMs / 1000;
-        setPauseCount(pauseCountRef.current);
-        setTotalPauseSec(Number(totalPauseSecRef.current.toFixed(1)));
-        logger.debug('Speech state transition: silent -> finish', {
-          pauseDurationMs: Math.round(pauseDurationMs),
-        });
-      }
-    }
     analyserRef.current = null;
-    lastFrameMsRef.current = null;
-    silenceStartMsRef.current = null;
-    speechStateRef.current = 'speaking';
-    belowThresholdSinceMsRef.current = null;
-    aboveThresholdSinceMsRef.current = null;
-    noiseFloorRef.current = null;
     liveRmsRef.current = 0;
     liveBarsRef.current = new Array(BAR_COUNT).fill(0.05);
     rmsStateRef.current = 0;
     lastRmsStateFlushMsRef.current = null;
     lastTranscriptFlushMsRef.current = null;
-    lastAsrActivityWallMsRef.current = null;
-    lastAsrTextRef.current = '';
-    lastCommittedCountRef.current = 0;
-    setIsSilentPause(false);
+    hasPartialStreamingRef.current = false;
+    setLivePauseMs(0);
     setIsSpeaking(false);
-    setCurrentSilenceSec(0);
     setRmsLevel(0);
     setFrequencyBars(new Array(BAR_COUNT).fill(0.05));
   }, []);
@@ -409,87 +399,6 @@ export function useSpeechAnalytics(
     }
   }, []);
 
-  const stepRmsPauseState = useCallback((rms, now, overrideThreshold = null) => {
-    const threshold =
-      overrideThreshold !== null
-        ? overrideThreshold
-        : Math.max(
-            MIN_SPEECH_THRESHOLD,
-            Number(((noiseFloorRef.current ?? 0.004) * 2.5).toFixed(4))
-          );
-    const asrVetoActive =
-      lastAsrActivityWallMsRef.current !== null &&
-      now - lastAsrActivityWallMsRef.current < ASR_VETO_WINDOW_MS;
-
-    if (speechStateRef.current === 'speaking') {
-      if (rms >= threshold || asrVetoActive) {
-        belowThresholdSinceMsRef.current = null;
-        setIsSpeaking(true);
-      } else if (belowThresholdSinceMsRef.current === null) {
-        belowThresholdSinceMsRef.current = now;
-      } else if (now - belowThresholdSinceMsRef.current >= SPEAKING_TO_SILENT_HYSTERESIS_MS) {
-        speechStateRef.current = 'silent';
-        silenceStartMsRef.current = belowThresholdSinceMsRef.current;
-        aboveThresholdSinceMsRef.current = null;
-        setIsSpeaking(false);
-        logger.debug('Speech state transition: speaking -> silent', {
-          rms: Number(rms.toFixed(5)),
-          threshold,
-          silenceStartMs: silenceStartMsRef.current,
-        });
-      }
-      return;
-    }
-
-    if (rms >= threshold) {
-      if (aboveThresholdSinceMsRef.current === null) {
-        aboveThresholdSinceMsRef.current = now;
-      } else if (now - aboveThresholdSinceMsRef.current >= SILENT_TO_SPEAKING_HYSTERESIS_MS) {
-        const pauseDurationMs =
-          silenceStartMsRef.current !== null ? Math.max(0, now - silenceStartMsRef.current) : 0;
-        if (pauseDurationMs >= PAUSE_DURATION_THRESHOLD_MS) {
-          pauseCountRef.current += 1;
-          totalPauseSecRef.current += pauseDurationMs / 1000;
-          setPauseCount(pauseCountRef.current);
-          setTotalPauseSec(Number(totalPauseSecRef.current.toFixed(1)));
-        }
-        logger.debug('Speech state transition: silent -> speaking', {
-          rms: Number(rms.toFixed(5)),
-          threshold,
-          pauseDurationMs: Math.round(pauseDurationMs),
-        });
-        speechStateRef.current = 'speaking';
-        silenceStartMsRef.current = null;
-        belowThresholdSinceMsRef.current = null;
-        aboveThresholdSinceMsRef.current = null;
-        setIsSpeaking(true);
-        setIsSilentPause(false);
-        setCurrentSilenceSec(0);
-      }
-      return;
-    }
-
-    aboveThresholdSinceMsRef.current = null;
-    noiseFloorRef.current =
-      noiseFloorRef.current === null
-        ? rms
-        : noiseFloorRef.current * (1 - NOISE_FLOOR_EMA_ALPHA) + rms * NOISE_FLOOR_EMA_ALPHA;
-    const ongoingMs =
-      silenceStartMsRef.current !== null ? Math.max(0, now - silenceStartMsRef.current) : 0;
-    if (ongoingMs >= PAUSE_DURATION_THRESHOLD_MS) {
-      setIsSilentPause(true);
-      setCurrentSilenceSec(Number((ongoingMs / 1000).toFixed(1)));
-    }
-  }, []);
-
-  const handleWasmRms = useCallback(
-    (rms) => {
-      pushAudioRms(rms);
-      stepRmsPauseState(rms, performance.now());
-    },
-    [pushAudioRms, stepRmsPauseState]
-  );
-
   const markFirstSpeechDetected = useCallback(() => {
     if (firstSpeechSecRef.current === null) {
       const elapsed = activeElapsedSecRef.current;
@@ -498,26 +407,31 @@ export function useSpeechAnalytics(
     }
   }, []);
 
-  const markAsrActivity = useCallback((payload) => {
+  const trackWordActivity = useCallback((payload) => {
     const safeWords = Array.isArray(payload?.words) ? payload.words : [];
-    const nextText = payload?.fullText || '';
-    const textChanged = nextText !== lastAsrTextRef.current;
-    const wordsGrew = safeWords.length > lastCommittedCountRef.current;
+    const text = payload?.fullText || '';
+    const liveWordsCount = Math.max(countNormalizedWords(text), safeWords.length);
 
-    lastAsrTextRef.current = nextText;
-    lastCommittedCountRef.current = safeWords.length;
+    if (!text && safeWords.length === 0) {
+      lastWordActivityAtRef.current = null;
+      lastFullTextWordCountRef.current = 0;
+      lastFullTextValueRef.current = '';
+      hasPartialStreamingRef.current = false;
+      setLivePauseMs(0);
+      setIsSpeaking(false);
+      return;
+    }
 
-    // Veto only: cancel any active pause candidate without recording a pause
-    if ((textChanged && nextText) || wordsGrew || (!payload?.isFinal && nextText)) {
-      lastAsrActivityWallMsRef.current = performance.now();
-      belowThresholdSinceMsRef.current = null;
-      aboveThresholdSinceMsRef.current = null;
-      if (speechStateRef.current === 'silent') {
-        speechStateRef.current = 'speaking';
-        silenceStartMsRef.current = null;
-        setIsSilentPause(false);
-        setCurrentSilenceSec(0);
-      }
+    hasPartialStreamingRef.current = !payload?.isFinal && Boolean(text);
+
+    if (
+      liveWordsCount > 0 &&
+      (liveWordsCount !== lastFullTextWordCountRef.current || text !== lastFullTextValueRef.current)
+    ) {
+      lastWordActivityAtRef.current = performance.now();
+      lastFullTextWordCountRef.current = liveWordsCount;
+      lastFullTextValueRef.current = text;
+      setLivePauseMs(0);
       setIsSpeaking(true);
     }
   }, []);
@@ -539,7 +453,7 @@ export function useSpeechAnalytics(
 
   const handleThrottledTranscript = useCallback(
     (payload) => {
-      markAsrActivity(payload);
+      trackWordActivity(payload);
       const safeWords = Array.isArray(payload?.words) ? payload.words : [];
       const text = payload?.fullText || '';
       const isEmptyReset = !text && safeWords.length === 0;
@@ -626,6 +540,9 @@ export function useSpeechAnalytics(
         const nextTotal = Math.max(speechTotal, burstEstimated);
         if (nextTotal > 0) {
           markFirstSpeechDetected();
+          lastWordActivityAtRef.current = performance.now();
+          setLivePauseMs(0);
+          setIsSpeaking(true);
         }
         setWordCount(nextTotal);
         if (recentText) {
@@ -679,12 +596,6 @@ export function useSpeechAnalytics(
 
     const tick = (now) => {
       if (!isRunningRef.current) return;
-
-      if (lastFrameMsRef.current === null) {
-        lastFrameMsRef.current = now;
-      }
-      const dtMs = Math.min(200, Math.max(0, now - lastFrameMsRef.current));
-      lastFrameMsRef.current = now;
 
       let rms = 0;
       let bars = null;
@@ -741,10 +652,7 @@ export function useSpeechAnalytics(
 
       const threshold = silenceThresholdRef.current;
 
-      // Pause Detection State Machine (RMS + hysteresis)
-      stepRmsPauseState(rms, now, threshold);
-
-      // Syllable Energy Burst Detector
+      // Syllable Energy Burst Detector (visual meter + fallback word estimate; no RMS pause state machine)
       const dipThreshold = threshold * SPEECH_BURST_DIP_FACTOR;
       const peakThreshold = Math.max(0.032, threshold * SPEECH_BURST_PEAK_FACTOR);
 
@@ -776,18 +684,13 @@ export function useSpeechAnalytics(
       if (now - uiThrottleMs >= 50) {
         uiThrottleMs = now;
         pushAudioRms(rms, bars);
-        if (silenceStartMsRef.current !== null) {
-          setCurrentSilenceSec(Number(((now - silenceStartMsRef.current) / 1000).toFixed(1)));
-        } else {
-          setCurrentSilenceSec(0);
-        }
       }
 
       rafIdRef.current = requestAnimationFrame(tick);
     };
 
     rafIdRef.current = requestAnimationFrame(tick);
-  }, [pushAudioRms, stepRmsPauseState]);
+  }, [pushAudioRms]);
 
   // Pre-warm WASM runtime & verify CacheStorage on mount when idle
   useEffect(() => {
@@ -987,7 +890,7 @@ export function useSpeechAnalytics(
 
           const capture = await micCaptureFactoryRef.current({
             onChunk: (chunk) => adapter.pushAudio(chunk),
-            onRms: (rms) => handleWasmRms(rms),
+            onRms: (rms) => pushAudioRms(rms),
           });
 
           if (cancelled || !isRunningRef.current) {
@@ -1049,22 +952,38 @@ export function useSpeechAnalytics(
     isRunning,
     isSimulatedMic,
     handleThrottledTranscript,
-    handleWasmRms,
+    pushAudioRms,
     startAnalysisLoop,
     startSpeechRecognition,
     stopAudioAndSpeech,
   ]);
 
+  // Live active pause timer while recording after >= 1 spoken word
+  useEffect(() => {
+    if (!isRunning) {
+      setLivePauseMs(0);
+      return undefined;
+    }
+    const intervalId = setInterval(() => {
+      if (lastWordActivityAtRef.current === null || hasPartialStreamingRef.current) {
+        setLivePauseMs(0);
+        return;
+      }
+      const elapsedSinceLastWord = performance.now() - lastWordActivityAtRef.current;
+      if (elapsedSinceLastWord >= PAUSE_DURATION_THRESHOLD_MS) {
+        setLivePauseMs(elapsedSinceLastWord);
+        setIsSpeaking(false);
+      } else {
+        setLivePauseMs(0);
+        setIsSpeaking(true);
+      }
+    }, LIVE_PAUSE_POLL_MS);
+
+    return () => clearInterval(intervalId);
+  }, [isRunning]);
+
   const resetAnalytics = useCallback(() => {
     stopAudioAndSpeech();
-    silenceStartMsRef.current = null;
-    speechStateRef.current = 'speaking';
-    belowThresholdSinceMsRef.current = null;
-    aboveThresholdSinceMsRef.current = null;
-    noiseFloorRef.current = null;
-    lastFrameMsRef.current = null;
-    totalPauseSecRef.current = 0;
-    pauseCountRef.current = 0;
     finalizedWordsRef.current = 0;
     interimWordsRef.current = 0;
     syllableCountRef.current = 0;
@@ -1073,19 +992,18 @@ export function useSpeechAnalytics(
     startElapsedRef.current = null;
     firstSpeechSecRef.current = null;
     wordSamplesRef.current = [];
-    lastAsrActivityWallMsRef.current = null;
-    lastAsrTextRef.current = '';
-    lastCommittedCountRef.current = 0;
+    lastWordActivityAtRef.current = null;
+    lastFullTextWordCountRef.current = 0;
+    lastFullTextValueRef.current = '';
+    hasPartialStreamingRef.current = false;
+    loggedGapCountRef.current = 0;
 
     setRmsLevel(0);
     setFrequencyBars(new Array(BAR_COUNT).fill(0.05));
     setWordCount(0);
     setWords([]);
-    setPauseCount(0);
-    setTotalPauseSec(0);
-    setIsSilentPause(false);
+    setLivePauseMs(0);
     setIsSpeaking(false);
-    setCurrentSilenceSec(0);
     setLiveTranscript('');
     setPacingTimeline([]);
     lastTimelineBucketRef.current = -1;
@@ -1101,11 +1019,30 @@ export function useSpeechAnalytics(
     estimationMethodRef.current = nextMethod;
   }, [stopAudioAndSpeech]);
 
-  // Pauses are computed strictly from audio RMS + hysteresis (decoupled from TRANSCRIPT_UPDATE cadence)
-  const effectivePauseCount = pauseCount;
-  const effectiveTotalPauseSec = totalPauseSec;
-  const effectiveIsSilentPause = isSilentPause;
-  const effectiveCurrentSilenceSec = currentSilenceSec;
+  // Completed pauses strictly from committedWords timestamps + live active pause timer
+  const committedPauses = useMemo(
+    () => computeCommittedWordPauses(words, PAUSE_DURATION_THRESHOLD_MS),
+    [words]
+  );
+
+  useEffect(() => {
+    if (committedPauses.gaps.length > loggedGapCountRef.current) {
+      for (let i = loggedGapCountRef.current; i < committedPauses.gaps.length; i += 1) {
+        logger.debug('Committed word gap detected', committedPauses.gaps[i]);
+      }
+      loggedGapCountRef.current = committedPauses.gaps.length;
+    }
+  }, [committedPauses.gaps]);
+
+  const hasLiveActivePause = isRunning && livePauseMs >= PAUSE_DURATION_THRESHOLD_MS;
+  const effectivePauseCount = committedPauses.pauseCount + (hasLiveActivePause ? 1 : 0);
+  const effectiveTotalPauseSec = Number(
+    ((committedPauses.totalPauseMs + (hasLiveActivePause ? livePauseMs : 0)) / 1000).toFixed(1)
+  );
+  const effectiveIsSilentPause = hasLiveActivePause;
+  const effectiveCurrentSilenceSec = hasLiveActivePause
+    ? Number((livePauseMs / 1000).toFixed(1))
+    : 0;
 
   // Synchronize active-speech start timestamp and 15s rolling word samples before computing WPM
   if (isRunning) {
