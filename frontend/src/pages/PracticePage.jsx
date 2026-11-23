@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { lazy, Suspense, useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Cpu, AlertCircle } from 'lucide-react';
 import { useTimer } from '../hooks/useTimer.js';
@@ -6,11 +6,13 @@ import { useSpeechAnalytics } from '../hooks/useSpeechAnalytics.js';
 import { useTranslation } from '../context/LanguageContext.jsx';
 import { presentationsApi, formatApiError } from '../api/client.js';
 import { calculatePresentationScore, generateProfessorVerdict } from '../utils/roastGenerator.js';
+import { speechStore, useSessionStatus } from '../stores/speechStore.js';
 import TimerControls from '../components/TimerControls.jsx';
 import AudioVisualizer from '../components/AudioVisualizer.jsx';
 import LiveMetricsBar from '../components/LiveMetricsBar.jsx';
 import LiveTranscriptPanel from '../components/LiveTranscriptPanel.jsx';
-import SessionSummaryModal from '../components/SessionSummaryModal.jsx';
+
+const SessionSummaryModal = lazy(() => import('../components/SessionSummaryModal.jsx'));
 
 export default function PracticePage() {
   const navigate = useNavigate();
@@ -21,8 +23,18 @@ export default function PracticePage() {
     setSpeechLang(lang === 'uk' ? 'uk-UA' : 'en-US');
   }, [lang]);
 
+  useEffect(() => {
+    return () => {
+      speechStore.reset();
+    };
+  }, []);
+
   const timer = useTimer(180);
-  const analytics = useSpeechAnalytics(timer.isRunning, timer.elapsedSec, speechLang);
+  const analytics = useSpeechAnalytics(timer.isRunning, timer.elapsedSec, speechLang, {
+    store: speechStore,
+    reactive: false,
+  });
+  const sessionStatus = useSessionStatus(speechStore);
 
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [summaryData, setSummaryData] = useState(null);
@@ -33,58 +45,47 @@ export default function PracticePage() {
     if (timer.isRunning) {
       timer.pause();
     }
+    const actualDurationSec = timer.getElapsedSec();
+    const snap = speechStore.getState();
     const timingStatus =
-      timer.elapsedSec > timer.targetDurationSec ? 'overtime' : 'on_time';
+      actualDurationSec > timer.targetDurationSec ? 'overtime' : 'on_time';
     const score = calculatePresentationScore({
       targetDurationSec: timer.targetDurationSec,
-      actualDurationSec: timer.elapsedSec,
-      wpm: analytics.wpm,
-      pauseCount: analytics.pauseCount,
-      totalPauseSec: analytics.totalPauseSec,
-      wordCount: analytics.wordCount,
-      fillerCount: analytics.fillerCount,
+      actualDurationSec,
+      wpm: snap.wpm,
+      pauseCount: snap.longPausesCount,
+      totalPauseSec: snap.totalPauseSec,
+      wordCount: snap.wordCount,
+      fillerCount: snap.fillerCount,
     });
     const verdict = generateProfessorVerdict({
       score,
-      wpm: analytics.wpm,
-      pauseCount: analytics.pauseCount,
-      fillerBreakdown: analytics.fillerBreakdown,
+      wpm: snap.wpm,
+      pauseCount: snap.longPausesCount,
+      fillerBreakdown: snap.fillerBreakdown,
       timingStatus,
       lang,
     });
 
     setSummaryData({
       targetDurationSec: timer.targetDurationSec,
-      actualDurationSec: timer.elapsedSec,
-      wordCount: analytics.wordCount,
-      wpm: analytics.wpm,
-      pauseCount: analytics.pauseCount,
-      totalPauseSec: analytics.totalPauseSec,
-      estimationMethod: analytics.estimationMethod,
-      fillerCount: analytics.fillerCount,
-      fillerBreakdown: analytics.fillerBreakdown,
-      pacingTimeline: analytics.pacingTimeline,
-      transcript: analytics.transcript,
+      actualDurationSec,
+      wordCount: snap.wordCount,
+      wpm: snap.wpm,
+      pauseCount: snap.longPausesCount,
+      totalPauseSec: snap.totalPauseSec,
+      estimationMethod: snap.estimationMethod,
+      fillerCount: snap.fillerCount,
+      fillerBreakdown: snap.fillerBreakdown,
+      pacingTimeline: snap.pacingTimeline,
+      transcript: snap.fullText,
       score,
       verdict,
       defaultTitle: t('summary.defaultTitle'),
     });
     setSaveError(null);
     setSummaryOpen(true);
-  }, [
-    analytics.estimationMethod,
-    analytics.fillerBreakdown,
-    analytics.fillerCount,
-    analytics.pacingTimeline,
-    analytics.pauseCount,
-    analytics.totalPauseSec,
-    analytics.transcript,
-    analytics.wordCount,
-    analytics.wpm,
-    lang,
-    t,
-    timer,
-  ]);
+  }, [lang, t, timer]);
 
   const handleResetAll = useCallback(() => {
     timer.reset();
@@ -128,10 +129,10 @@ export default function PracticePage() {
   );
 
   return (
-    <div className="max-w-5xl mx-auto px-4 py-8 space-y-6 text-[#F4F5F7]">
+    <div className="max-w-5xl mx-auto px-3 sm:px-4 py-5 sm:py-8 pb-28 sm:pb-8 space-y-5 sm:space-y-6 text-[#F4F5F7]">
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 pb-4 border-b border-white/[0.08]">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight text-[#F4F5F7]">
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-[#F4F5F7]">
             {t('practice.title')}
           </h1>
           <p className="text-sm text-[#9CA3AF] mt-1">
@@ -170,12 +171,18 @@ export default function PracticePage() {
 
       {/* Rust/WASM Local Speech Engine Status & Progress Bar */}
       <div className="obsidian-glass rounded-xl px-4 py-3 space-y-2">
-        <div className="flex items-center justify-between text-xs">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
           <div className="flex items-center gap-2 text-[#C4B5FD] font-medium">
             <Cpu className="h-3.5 w-3.5 text-[#8B5CF6]" />
             <span>{t('practice.wasmEngineLabel')}</span>
+            <span
+              data-testid="wasm-mode-pill"
+              className="px-2 py-0.5 rounded-md bg-[#8B5CF6]/15 border border-[#8B5CF6]/35 text-[10px] font-mono text-[#C4B5FD] tabular-nums"
+            >
+              {sessionStatus.wasmMode} · {sessionStatus.activeLang}
+            </span>
           </div>
-          <span className="font-mono text-[11px] text-[#10B981]">
+          <span className="font-mono text-[11px] text-[#10B981] tabular-nums">
             {timer.isRunning ? t('practice.wasmActive') : t('practice.wasmReady')}
           </span>
         </div>
@@ -184,33 +191,33 @@ export default function PracticePage() {
           role="progressbar"
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-valuenow={analytics.modelProgress.percent}
+          aria-valuenow={sessionStatus.modelProgress.percent}
           className="h-1.5 w-full rounded-full obsidian-inset overflow-hidden"
         >
           <div
             className="h-full rounded-full bg-gradient-to-r from-[#8B5CF6] via-[#FF6363] to-[#10B981] transition-all duration-500"
-            style={{ width: `${analytics.modelProgress.percent}%` }}
+            style={{ width: `${sessionStatus.modelProgress.percent}%` }}
           />
         </div>
       </div>
 
-      {analytics.engineError && (
+      {sessionStatus.engineError && (
         <div
           role="alert"
           className="flex items-center gap-2 rounded-xl bg-[#FF6363]/12 border border-[#FF6363]/50 px-4 py-3 text-xs font-medium text-[#FCA5A5]"
         >
           <AlertCircle className="h-4 w-4 shrink-0 text-[#FF6363]" />
-          <span>{analytics.engineError}</span>
+          <span>{sessionStatus.engineError}</span>
         </div>
       )}
 
-      {analytics.micError && (
+      {sessionStatus.micError && (
         <div
           role="alert"
           className="flex items-center gap-2 rounded-xl bg-[#FF6363]/12 border border-[#FF6363]/50 px-4 py-3 text-xs font-medium text-[#FCA5A5]"
         >
           <AlertCircle className="h-4 w-4 shrink-0 text-[#FF6363]" />
-          <span>{analytics.micError}</span>
+          <span>{sessionStatus.micError}</span>
         </div>
       )}
 
@@ -222,6 +229,9 @@ export default function PracticePage() {
         timerStatus={timer.timerStatus}
         isRunning={timer.isRunning}
         isPaused={timer.isPaused}
+        remainingDisplayRef={timer.remainingDisplayRef}
+        elapsedDisplayRef={timer.elapsedDisplayRef}
+        progressBarRef={timer.progressBarRef}
         onStart={timer.start}
         onPause={timer.pause}
         onResume={timer.resume}
@@ -234,40 +244,34 @@ export default function PracticePage() {
         frequencyBars={analytics.frequencyBars}
         rmsRef={analytics.liveRmsRef}
         barsRef={analytics.liveBarsRef}
-        isSilentPause={analytics.isSilentPause}
         isRunning={timer.isRunning}
         noiseThreshold={analytics.noiseThreshold}
         onChangeThreshold={analytics.setNoiseThreshold}
         speechLang={speechLang}
         onChangeSpeechLang={setSpeechLang}
+        store={speechStore}
       />
 
-      <LiveMetricsBar
-        wpm={analytics.wpm}
-        rollingWpm={analytics.rollingWpm}
-        pacingZone={analytics.pacingZone}
-        wordCount={analytics.wordCount}
-        pauseCount={analytics.pauseCount}
-        totalPauseSec={analytics.totalPauseSec}
-        fillerCount={analytics.fillerCount}
-        isSilentPause={analytics.isSilentPause}
-        currentSilenceSec={analytics.currentSilenceSec}
-        estimationMethod={analytics.estimationMethod}
-      />
+      <LiveMetricsBar store={speechStore} />
 
       <LiveTranscriptPanel
         title={t('practice.liveTranscript')}
-        transcript={analytics.liveTranscript}
+        speechLang={speechLang}
+        store={speechStore}
       />
 
-      <SessionSummaryModal
-        isOpen={summaryOpen}
-        onClose={handleCloseSummary}
-        onSave={handleSaveSession}
-        summary={summaryData}
-        isSaving={isSaving}
-        saveError={saveError}
-      />
+      {summaryOpen && (
+        <Suspense fallback={null}>
+          <SessionSummaryModal
+            isOpen={summaryOpen}
+            onClose={handleCloseSummary}
+            onSave={handleSaveSession}
+            summary={summaryData}
+            isSaving={isSaving}
+            saveError={saveError}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

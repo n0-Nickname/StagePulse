@@ -100,6 +100,12 @@ export const translations = {
       liveTranscript: 'Live transcript',
       saveError: 'Failed to save presentation session',
     },
+    transcript: {
+      copy: 'Copy',
+      copied: 'Copied',
+      exportTxt: 'Export .txt',
+      jumpToLatest: 'Jump to latest',
+    },
     timer: {
       timeRemaining: 'Time remaining',
       elapsed: 'Elapsed',
@@ -307,6 +313,12 @@ export const translations = {
       simSilenceOff: 'Імітувати тишу',
       liveTranscript: 'Жива транскрипція',
       saveError: 'Не вдалося зберегти сесію виступу',
+    },
+    transcript: {
+      copy: 'Копіювати',
+      copied: 'Скопійовано',
+      exportTxt: 'Експорт .txt',
+      jumpToLatest: 'До кінця',
     },
     timer: {
       timeRemaining: 'Залишилось часу',

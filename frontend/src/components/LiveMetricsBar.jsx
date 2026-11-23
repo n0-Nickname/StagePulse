@@ -1,19 +1,47 @@
 import React, { memo } from 'react';
 import { useTranslation } from '../context/LanguageContext.jsx';
+import {
+  speechStore,
+  useWpmMetrics,
+  usePauseMetrics,
+  useFillerMetrics,
+  useSessionStatus,
+} from '../stores/speechStore.js';
 
 function LiveMetricsBar({
-  wpm = 0,
-  rollingWpm = 0,
-  pacingZone = 'warming_up',
-  wordCount = 0,
-  pauseCount = 0,
-  totalPauseSec = 0,
-  fillerCount = 0,
-  isSilentPause = false,
-  currentSilenceSec = 0,
-  estimationMethod = 'speech_api',
+  wpm: wpmProp,
+  rollingWpm: rollingWpmProp,
+  pacingZone: pacingZoneProp,
+  wordCount: wordCountProp,
+  pauseCount: pauseCountProp,
+  totalPauseSec: totalPauseSecProp,
+  fillerCount: fillerCountProp,
+  isSilentPause: isSilentPauseProp,
+  currentSilenceSec: currentSilenceSecProp,
+  estimationMethod: estimationMethodProp,
+  store = speechStore,
 }) {
   const { t } = useTranslation();
+  const wpmSlice = useWpmMetrics(store);
+  const pauseSlice = usePauseMetrics(store);
+  const fillerSlice = useFillerMetrics(store);
+  const statusSlice = useSessionStatus(store);
+
+  const wpm = wpmProp !== undefined ? wpmProp : wpmSlice.wpm;
+  const rollingWpm = rollingWpmProp !== undefined ? rollingWpmProp : wpmSlice.rollingWpm;
+  const pacingZone = pacingZoneProp !== undefined ? pacingZoneProp : wpmSlice.pacingZone;
+  const wordCount = wordCountProp !== undefined ? wordCountProp : wpmSlice.wordCount;
+  const pauseCount = pauseCountProp !== undefined ? pauseCountProp : pauseSlice.longPausesCount;
+  const totalPauseSec =
+    totalPauseSecProp !== undefined ? totalPauseSecProp : pauseSlice.totalPauseSec;
+  const isSilentPause =
+    isSilentPauseProp !== undefined ? isSilentPauseProp : pauseSlice.isPausedLive;
+  const currentSilenceSec =
+    currentSilenceSecProp !== undefined ? currentSilenceSecProp : pauseSlice.currentSilenceSec;
+  const fillerCount =
+    fillerCountProp !== undefined ? fillerCountProp : fillerSlice.fillerCount;
+  const estimationMethod =
+    estimationMethodProp !== undefined ? estimationMethodProp : statusSlice.estimationMethod;
 
   const PACING_STATES = {
     warming_up: {
@@ -41,8 +69,8 @@ function LiveMetricsBar({
   const pace = PACING_STATES[pacingZone] || PACING_STATES.warming_up;
 
   return (
-    <div className="w-full obsidian-glass rounded-2xl grid grid-cols-2 sm:grid-cols-5 divide-y sm:divide-y-0 sm:divide-x divide-white/[0.08]">
-      <div className="p-4 flex flex-col justify-between gap-2">
+    <div className="w-full obsidian-glass rounded-2xl grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 divide-y sm:divide-y-0 sm:divide-x divide-white/[0.08]">
+      <div className="p-3.5 sm:p-4 flex flex-col justify-between gap-2">
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs text-[#9CA3AF]">{t('metrics.speakingPace')}</span>
           <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium ${pace.text}`}>
@@ -53,7 +81,7 @@ function LiveMetricsBar({
         <div className="flex items-baseline gap-1.5">
           <span
             data-testid="live-wpm-value"
-            className="text-3xl font-bold font-mono text-[#F4F5F7] tabular-nums tracking-tight"
+            className="text-2xl sm:text-3xl font-bold font-mono text-[#F4F5F7] tabular-nums tracking-tight"
           >
             {wpm}
           </span>
@@ -69,39 +97,40 @@ function LiveMetricsBar({
         </div>
       </div>
 
-      <div className="p-4 flex flex-col justify-between gap-2">
+      <div className="p-3.5 sm:p-4 flex flex-col justify-between gap-2">
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs text-[#9CA3AF]">{t('metrics.words')}</span>
           <span className="text-[11px] font-mono text-[#8B5CF6]">
             {estimationMethod === 'speech_api' ? t('metrics.speechApi') : t('metrics.audioBurst')}
           </span>
         </div>
-        <div className="text-3xl font-bold font-mono text-[#F4F5F7] tabular-nums tracking-tight">
+        <div className="text-2xl sm:text-3xl font-bold font-mono text-[#F4F5F7] tabular-nums tracking-tight">
           {wordCount}
         </div>
       </div>
 
-      <div className="p-4 flex flex-col justify-between gap-2">
+      <div className="p-3.5 sm:p-4 flex flex-col justify-between gap-2">
         <span className="text-xs text-[#9CA3AF]">{t('metrics.longPauses')}</span>
         <div className="flex items-baseline gap-2">
           <span
             data-testid="live-pause-count"
-            className="text-3xl font-bold font-mono text-[#F4F5F7] tabular-nums tracking-tight"
+            className="text-2xl sm:text-3xl font-bold font-mono text-[#F4F5F7] tabular-nums tracking-tight"
           >
             {pauseCount}
           </span>
           <span className="text-xs font-mono text-[#9CA3AF] tabular-nums">
-            {Math.round(totalPauseSec)}{t('common.sec')} {t('metrics.total')}
+            {Math.round(totalPauseSec)}
+            {t('common.sec')} {t('metrics.total')}
           </span>
         </div>
       </div>
 
-      <div className="p-4 flex flex-col justify-between gap-2">
+      <div className="p-3.5 sm:p-4 flex flex-col justify-between gap-2">
         <span className="text-xs text-[#9CA3AF]">{t('metrics.fillers')}</span>
         <div className="flex items-baseline gap-2">
           <span
             data-testid="live-filler-count"
-            className={`text-3xl font-bold font-mono tabular-nums tracking-tight ${
+            className={`text-2xl sm:text-3xl font-bold font-mono tabular-nums tracking-tight ${
               fillerCount > 0 ? 'text-[#FF6363]' : 'text-[#10B981]'
             }`}
           >
@@ -111,7 +140,7 @@ function LiveMetricsBar({
       </div>
 
       <div
-        className={`col-span-2 sm:col-span-1 p-4 flex flex-col justify-between gap-2 transition-colors rounded-b-2xl sm:rounded-b-none sm:rounded-r-2xl ${
+        className={`col-span-2 sm:col-span-3 lg:col-span-1 p-3.5 sm:p-4 flex flex-col justify-between gap-2 transition-colors rounded-b-2xl lg:rounded-b-none lg:rounded-r-2xl ${
           isSilentPause ? 'bg-[#F59E0B]/10' : ''
         }`}
       >
