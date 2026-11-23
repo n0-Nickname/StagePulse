@@ -1,6 +1,9 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { startMicCapture } from '../audio/micCapture.js';
 import { createDefaultAsrEngine } from '../services/asrAdapter.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('ASR:Analytics');
 
 const DEFAULT_SILENCE_THRESHOLD = 0.018;
 const PAUSE_DURATION_THRESHOLD_MS = 1500;
@@ -122,6 +125,7 @@ export function useSpeechAnalytics(
   const [isSimulatedMic, setIsSimulatedMic] = useState(false);
   const [isSimulatingSilence, setIsSimulatingSilence] = useState(false);
   const [micError, setMicError] = useState(null);
+  const [engineError, setEngineError] = useState(null);
   const [liveTranscript, setLiveTranscript] = useState('');
   const [pacingTimeline, setPacingTimeline] = useState([]);
   const [modelProgress, setModelProgress] = useState({
@@ -538,6 +542,7 @@ export function useSpeechAnalytics(
       }
 
       setMicError(null);
+      setEngineError(null);
 
       const useWasmPipeline =
         Boolean(engineFactoryRef.current) || typeof globalThis.Worker !== 'undefined';
@@ -568,6 +573,12 @@ export function useSpeechAnalytics(
               setWordCount(safeWords.length);
               if (fullText) {
                 setLiveTranscript(fullText);
+              }
+            },
+            onError: (err) => {
+              logger.error('WASM ASR engine error', { err });
+              if (!cancelled) {
+                setEngineError(err?.message || 'ASR engine error');
               }
             },
           });
@@ -603,6 +614,7 @@ export function useSpeechAnalytics(
           asrEngineRef.current = null;
           // If microphone itself failed, switch to Demo Speech Simulator
           if (err?.message && /mediaDevices|Permission|Audio/i.test(err.message)) {
+            logger.error('Mic capture error in WASM pipeline', { err });
             if (!cancelled) {
               setMicError(err.message);
               setIsSimulatedMic(true);
@@ -613,7 +625,12 @@ export function useSpeechAnalytics(
             }
             return;
           }
-          // Otherwise fall through to Web Speech / Audio Burst fallback
+          logger.error('WASM ASR pipeline failed, falling back to legacy speech/burst', { err });
+          if (!cancelled) {
+            setEngineError(err?.message || 'ASR engine initialization failed');
+            setModelProgress({ percent: 0, cached: false, ready: false });
+          }
+          // Fall through to Web Speech / Audio Burst fallback
         }
       }
 
@@ -665,6 +682,7 @@ export function useSpeechAnalytics(
     setPacingTimeline([]);
     lastTimelineBucketRef.current = -1;
     setMicError(null);
+    setEngineError(null);
     setIsSimulatingSilence(false);
 
     const hasSpeechApi =
@@ -741,6 +759,7 @@ export function useSpeechAnalytics(
     isSimulatingSilence,
     setIsSimulatingSilence,
     micError,
+    engineError,
     liveTranscript,
     transcript: liveTranscript,
     fillerCount,

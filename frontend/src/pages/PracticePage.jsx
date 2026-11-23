@@ -163,15 +163,25 @@ export default function PracticePage() {
           role="progressbar"
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-valuenow={100}
+          aria-valuenow={analytics.modelProgress.percent}
           className="h-1.5 w-full rounded-full obsidian-inset overflow-hidden"
         >
           <div
             className="h-full rounded-full bg-gradient-to-r from-[#8B5CF6] via-[#FF6363] to-[#10B981] transition-all duration-500"
-            style={{ width: '100%' }}
+            style={{ width: `${analytics.modelProgress.percent}%` }}
           />
         </div>
       </div>
+
+      {analytics.engineError && (
+        <div
+          role="alert"
+          className="flex items-center gap-2 rounded-xl bg-[#FF6363]/12 border border-[#FF6363]/50 px-4 py-3 text-xs font-medium text-[#FCA5A5]"
+        >
+          <AlertCircle className="h-4 w-4 shrink-0 text-[#FF6363]" />
+          <span>{analytics.engineError}</span>
+        </div>
+      )}
 
       {analytics.micError && (
         <div
