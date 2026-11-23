@@ -158,7 +158,7 @@ describe('useSpeechAnalytics', () => {
     expect(pushAudio).toHaveBeenCalledTimes(1);
     expect(result.current.rmsLevel).toBeGreaterThan(0);
 
-    // Emit timestamped words with a 1.8s pause between words
+    // Emit timestamped words; pauses are decoupled from TRANSCRIPT_UPDATE cadence (no false pauses from word gaps)
     act(() => {
       callbacks.onTranscript({
         words: [
@@ -174,11 +174,9 @@ describe('useSpeechAnalytics', () => {
     expect(result.current.wordCount).toBe(3);
     expect(result.current.fillerCount).toBe(1);
     expect(result.current.wpm).toBe(30); // 3 words / (6/60 min) = 30 wpm
-
-    // Elapsed = 6s => 6000ms - 3400ms = 2600ms trailing silence + 1800ms internal gap => 2 pauses
-    expect(result.current.pauseCount).toBe(2);
-    expect(result.current.isSilentPause).toBe(true);
-    expect(result.current.totalPauseSec).toBe(4.4);
+    expect(result.current.pauseCount).toBe(0);
+    expect(result.current.isSilentPause).toBe(false);
+    expect(result.current.totalPauseSec).toBe(0);
 
     // Empty transcript payload resets words safely
     act(() => {
@@ -378,16 +376,19 @@ describe('useSpeechAnalytics', () => {
 
     getFloat.mockImplementation((arr) => arr.fill(0.002));
     await flushRafFrame(1600);
+    await flushRafFrame(2000); // >350ms speaking -> silent hysteresis
     await flushRafFrame(3200);
     await flushRafFrame(3400);
 
-    expect(result.current.pauseCount).toBe(1);
     expect(result.current.isSilentPause).toBe(true);
-    expect(result.current.totalPauseSec).toBeGreaterThan(1.5);
 
+    // 120ms silent -> speaking hysteresis records exact pause duration (>= 1500ms)
     getFloat.mockImplementation((arr) => arr.fill(0.4));
     await flushRafFrame(3500);
+    await flushRafFrame(3650);
     expect(result.current.isSilentPause).toBe(false);
+    expect(result.current.pauseCount).toBe(1);
+    expect(result.current.totalPauseSec).toBeCloseTo(2.0, 1);
 
     await act(async () => {
       rerender({ running: true, elapsed: 10, lang: 'en-US' });
@@ -454,7 +455,16 @@ describe('useSpeechAnalytics', () => {
       result.current.setIsSimulatingSilence(true);
     });
     await flushRafFrame(4600);
+    await flushRafFrame(5000); // >350ms speaking -> silent hysteresis
     await flushRafFrame(6300);
+    expect(result.current.isSilentPause).toBe(true);
+
+    // Resuming speech for >120ms closes and records the simulated pause
+    await act(async () => {
+      result.current.setIsSimulatingSilence(false);
+    });
+    await flushRafFrame(6400);
+    await flushRafFrame(6550);
     expect(result.current.pauseCount).toBeGreaterThanOrEqual(1);
 
     await act(async () => {
@@ -945,8 +955,12 @@ describe('useSpeechAnalytics', () => {
     Object.defineProperty(globalThis, 'caches', { value: origCaches, configurable: true });
   });
 
-  it('overrides false silence on TRANSCRIPT_UPDATE and uses adaptive post-AGC RMS in WASM pipeline', async () => {
+  it('computes exact RMS pauses with 350ms/120ms hysteresis, noiseFloor EMA, 800ms ASR veto, and dev logs', async () => {
     vi.useFakeTimers();
+    vi.stubEnv('VITE_APP_ENV', 'dev');
+    vi.stubEnv('VITE_LOG_LEVEL', 'debug');
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+
     let callbacks = null;
     let captureOpts = null;
     const engineFactory = () => ({
@@ -968,65 +982,160 @@ describe('useSpeechAnalytics', () => {
     );
     await vi.waitFor(() => expect(captureOpts).not.toBeNull());
 
-    // Simulate low PipeWire room noise floor (0.004) for 2s -> triggers RMS silence
+    // 1. Continuous speech with 2s gaps between TRANSCRIPT_UPDATE -> 0 long pauses
+    for (let i = 0; i < 6; i += 1) {
+      act(() => {
+        captureOpts.onRms(0.05);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+    }
+    act(() => {
+      callbacks.onTranscript({ words: [], fullText: 'Безперервне мовлення', isFinal: false });
+    });
+    expect(result.current.pauseCount).toBe(0);
+    expect(result.current.isSilentPause).toBe(false);
+    expect(result.current.isSpeaking).toBe(true);
+
+    // 2. Brief dip (< 350ms) does NOT trigger silent state
     act(() => {
       captureOpts.onRms(0.004);
     });
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1600);
+      await vi.advanceTimersByTimeAsync(250);
+    });
+    act(() => {
+      captureOpts.onRms(0.004);
+      captureOpts.onRms(0.05);
+    });
+    expect(result.current.isSpeaking).toBe(true);
+    expect(result.current.pauseCount).toBe(0);
+
+    // 3. 800ms ASR veto cancels an active pause candidate without recording a pause
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(900); // expire initial 800ms ASR veto
+    });
+    act(() => {
+      captureOpts.onRms(0.003);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400); // 400ms >= 350ms -> enters silent candidate
+    });
+    act(() => {
+      captureOpts.onRms(0.003);
+    });
+    expect(result.current.isSpeaking).toBe(false);
+
+    // ASR emits text -> vetoes active pause candidate immediately
+    act(() => {
+      callbacks.onTranscript({ words: [], fullText: 'Продовження мовлення', isFinal: false });
+    });
+    expect(result.current.isSpeaking).toBe(true);
+    expect(result.current.pauseCount).toBe(0);
+
+    // 4. Exact ~2.5s silent pause (not 5s!) with a <120ms noise spike ignored during silence
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(900); // expire 800ms ASR veto
+    });
+    act(() => {
+      captureOpts.onRms(0.004); // t=0 of silence
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400); // >=350ms -> speaking -> silent (silenceStart=t0)
+    });
+    act(() => {
+      captureOpts.onRms(0.004);
+    });
+    expect(result.current.isSpeaking).toBe(false);
+
+    // Brief 60ms spike >= threshold during silence must NOT prematurely close silence
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1400);
+    });
+    act(() => {
+      captureOpts.onRms(0.05);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60);
+    });
+    act(() => {
+      captureOpts.onRms(0.004); // drops back below threshold before 120ms
+    });
+
+    // At ~2400ms into silence, isSilentPause is true; then 120ms speaking closes at ~2.5s
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500); // ~2360ms total silence
     });
     act(() => {
       captureOpts.onRms(0.004);
     });
     expect(result.current.isSilentPause).toBe(true);
-    expect(result.current.isSpeaking).toBe(false);
+
+    act(() => {
+      captureOpts.onRms(0.06); // speech resumes
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(140); // >=120ms silent -> speaking
+    });
+    act(() => {
+      captureOpts.onRms(0.06);
+    });
+    expect(result.current.isSilentPause).toBe(false);
+    expect(result.current.isSpeaking).toBe(true);
     expect(result.current.pauseCount).toBe(1);
+    expect(result.current.totalPauseSec).toBeGreaterThanOrEqual(2.4);
+    expect(result.current.totalPauseSec).toBeLessThan(3.0);
 
-    // 1. ASR Activity Override: TRANSCRIPT_UPDATE with partial speech immediately clears silence & marks isSpeaking=true
+    // Verify dev logger.debug logged speaking <-> silent transitions with rms, threshold, pauseDurationMs
+    const debugMsgs = debugSpy.mock.calls.map((c) => `${c[0]} ${JSON.stringify(c[2] ?? {})}`);
+    expect(debugMsgs.some((m) => m.includes('speaking -> silent') && m.includes('"threshold":'))).toBe(true);
+    expect(debugMsgs.some((m) => m.includes('silent -> speaking') && m.includes('"pauseDurationMs":'))).toBe(true);
+
+    // 5. Short silence (< 1500ms) followed by speech is NOT recorded as a long pause
+    act(() => {
+      captureOpts.onRms(0.003);
+    });
     await act(async () => {
-      rerender({ running: true, elapsed: 5 });
+      await vi.advanceTimersByTimeAsync(400);
     });
     act(() => {
-      callbacks.onTranscript({
-        words: [{ text: 'Початок', startMs: 100, endMs: 500 }],
-        fullText: 'Початок активного мовлення без паузи',
-        isFinal: false,
-      });
+      captureOpts.onRms(0.003);
     });
-    expect(result.current.isSpeaking).toBe(true);
-    expect(result.current.isSilentPause).toBe(false);
-    expect(result.current.currentSilenceSec).toBe(0);
-    expect(result.current.pauseCount).toBe(0);
-
-    // 2. After an isFinal commit, post-AGC quiet PipeWire voice RMS (0.025 over 0.004 noise floor) prevents false silence
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300); // 700ms total < 1500ms
+    });
     act(() => {
-      callbacks.onTranscript({
-        words: [{ text: 'Початок', startMs: 100, endMs: 500 }],
-        fullText: 'Початок',
-        isFinal: true,
-      });
-      captureOpts.onRms(0.025);
+      captureOpts.onRms(0.06);
     });
-    expect(result.current.isSpeaking).toBe(true);
-    expect(result.current.isSilentPause).toBe(false);
-    expect(result.current.pauseCount).toBe(0);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(140);
+    });
+    act(() => {
+      captureOpts.onRms(0.06);
+    });
+    expect(result.current.pauseCount).toBe(1); // unchanged
 
-    // 3. Genuine post-commit silence (>= 1500ms at 0.002 RMS with no new ASR updates) marks silent pause
+    // 6. Session finish while in >=1500ms active silence records exact pause on finish
+    act(() => {
+      captureOpts.onRms(0.003);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    act(() => {
+      captureOpts.onRms(0.003);
+    });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1600);
     });
-    act(() => {
-      captureOpts.onRms(0.002);
-    });
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1600);
+      rerender({ running: false, elapsed: 12 });
     });
-    act(() => {
-      captureOpts.onRms(0.002);
-    });
-    expect(result.current.isSpeaking).toBe(false);
-    expect(result.current.isSilentPause).toBe(true);
+    expect(result.current.pauseCount).toBe(2);
+    expect(result.current.totalPauseSec).toBeGreaterThanOrEqual(4.3);
 
+    vi.unstubAllEnvs();
     vi.useRealTimers();
     unmount();
   });
