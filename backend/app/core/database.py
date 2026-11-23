@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -18,11 +19,18 @@ def create_app_async_engine(database_url: str) -> AsyncEngine:
             database_url,
             connect_args={"check_same_thread": False},
         )
+    parsed = urlparse(database_url)
+    query_params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    ssl_mode = query_params.pop("sslmode", None)
+    query_params.pop("channel_binding", None)
+    clean_url = urlunparse(parsed._replace(query=urlencode(query_params)))
+    connect_args = {"ssl": "require"} if ssl_mode in ("require", "verify-ca", "verify-full") else {}
     return create_async_engine(
-        database_url,
+        clean_url,
         pool_pre_ping=True,
         pool_size=10,
         max_overflow=20,
+        connect_args=connect_args,
     )
 
 

@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables or .env file."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=(".env", "../.env"),
         env_file_encoding="utf-8",
         extra="ignore",
         populate_by_name=True,
@@ -36,8 +36,16 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_database_url(self) -> Self:
-        """Default SQLite aiosqlite in dev; require postgresql+asyncpg in prod."""
+        """Default SQLite aiosqlite in dev; normalize dev postgres URLs for asyncpg."""
         if self.app_env == "dev":
+            if self.database_url.startswith("postgres://"):
+                self.database_url = (
+                    "postgresql+asyncpg://" + self.database_url[len("postgres://") :]
+                )
+            elif self.database_url.startswith("postgresql://"):
+                self.database_url = (
+                    "postgresql+asyncpg://" + self.database_url[len("postgresql://") :]
+                )
             if self.database_url == "":
                 self.database_url = "sqlite+aiosqlite:///./presentation_timer.db"
             return self
