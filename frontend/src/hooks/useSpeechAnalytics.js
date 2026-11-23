@@ -6,7 +6,12 @@ import { createLogger } from '../utils/logger.js';
 const logger = createLogger('ASR:Analytics');
 
 const DEFAULT_SILENCE_THRESHOLD = 0.018;
+const MIN_SPEECH_THRESHOLD = 0.015;
 const PAUSE_DURATION_THRESHOLD_MS = 1500;
+const SPEAKING_TO_SILENT_HYSTERESIS_MS = 350;
+const SILENT_TO_SPEAKING_HYSTERESIS_MS = 120;
+const ASR_VETO_WINDOW_MS = 800;
+const NOISE_FLOOR_EMA_ALPHA = 0.08;
 const SPEECH_BURST_DIP_FACTOR = 1.22;
 const SPEECH_BURST_PEAK_FACTOR = 1.95;
 const SYLLABLE_COOLDOWN_MS = 140;
@@ -33,8 +38,7 @@ export function normalizeWordTimestamps(words = []) {
 export function computeWordTimestampPauses(
   words = [],
   currentElapsedMs = 0,
-  thresholdMs = PAUSE_DURATION_THRESHOLD_MS,
-  { suppressTrailingSilence = false } = {}
+  thresholdMs = PAUSE_DURATION_THRESHOLD_MS
 ) {
   if (!Array.isArray(words) || words.length === 0) {
     return {
@@ -58,9 +62,7 @@ export function computeWordTimestampPauses(
   }
 
   const lastWord = normalized[normalized.length - 1];
-  const trailingSilenceMs = suppressTrailingSilence
-    ? 0
-    : Math.max(0, currentElapsedMs - lastWord.endMs);
+  const trailingSilenceMs = Math.max(0, currentElapsedMs - lastWord.endMs);
   const isSilentPause = trailingSilenceMs >= thresholdMs;
   const currentSilenceSec = Number((trailingSilenceMs / 1000).toFixed(1));
 
@@ -215,17 +217,17 @@ export function useSpeechAnalytics(
   const firstSpeechSecRef = useRef(null);
   const wordSamplesRef = useRef([]);
 
-  // Transcript throttle, ASR activity override, adaptive noise floor & warmup refs
+  // Transcript throttle, ASR 800ms veto, RMS hysteresis & noiseFloor EMA refs
   const transcriptTimerRef = useRef(null);
   const pendingTranscriptRef = useRef(null);
   const lastTranscriptFlushMsRef = useRef(null);
   const lastAsrActivityWallMsRef = useRef(null);
   const lastAsrTextRef = useRef('');
   const lastCommittedCountRef = useRef(0);
-  const hasPartialSpeechRef = useRef(false);
-  const voiceActiveAfterCommitRef = useRef(false);
-  const noiseFloorRmsRef = useRef(null);
-  const lastWasmRmsWallMsRef = useRef(null);
+  const speechStateRef = useRef('speaking');
+  const belowThresholdSinceMsRef = useRef(null);
+  const aboveThresholdSinceMsRef = useRef(null);
+  const noiseFloorRef = useRef(null);
   const warmedEngineRef = useRef(null);
   const liveCallbacksRef = useRef({
     onProgress: null,
@@ -252,7 +254,6 @@ export function useSpeechAnalytics(
   const micCaptureHandleRef = useRef(null);
 
   const silenceStartMsRef = useRef(null);
-  const isCurrentlyPausedRef = useRef(false);
   const lastFrameMsRef = useRef(null);
   const totalPauseSecRef = useRef(0);
   const pauseCountRef = useRef(0);
@@ -357,10 +358,25 @@ export function useSpeechAnalytics(
       }
       audioCtxRef.current = null;
     }
+    if (speechStateRef.current === 'silent' && silenceStartMsRef.current !== null) {
+      const pauseDurationMs = Math.max(0, performance.now() - silenceStartMsRef.current);
+      if (pauseDurationMs >= PAUSE_DURATION_THRESHOLD_MS) {
+        pauseCountRef.current += 1;
+        totalPauseSecRef.current += pauseDurationMs / 1000;
+        setPauseCount(pauseCountRef.current);
+        setTotalPauseSec(Number(totalPauseSecRef.current.toFixed(1)));
+        logger.debug('Speech state transition: silent -> finish', {
+          pauseDurationMs: Math.round(pauseDurationMs),
+        });
+      }
+    }
     analyserRef.current = null;
     lastFrameMsRef.current = null;
     silenceStartMsRef.current = null;
-    isCurrentlyPausedRef.current = false;
+    speechStateRef.current = 'speaking';
+    belowThresholdSinceMsRef.current = null;
+    aboveThresholdSinceMsRef.current = null;
+    noiseFloorRef.current = null;
     liveRmsRef.current = 0;
     liveBarsRef.current = new Array(BAR_COUNT).fill(0.05);
     rmsStateRef.current = 0;
@@ -369,10 +385,6 @@ export function useSpeechAnalytics(
     lastAsrActivityWallMsRef.current = null;
     lastAsrTextRef.current = '';
     lastCommittedCountRef.current = 0;
-    hasPartialSpeechRef.current = false;
-    voiceActiveAfterCommitRef.current = false;
-    noiseFloorRmsRef.current = null;
-    lastWasmRmsWallMsRef.current = null;
     setIsSilentPause(false);
     setIsSpeaking(false);
     setCurrentSilenceSec(0);
@@ -397,74 +409,83 @@ export function useSpeechAnalytics(
     }
   }, []);
 
-  const stepRmsPauseState = useCallback((rms, threshold, now, dtMs, asrRecentlyActive = false) => {
-    if (rms < threshold && !asrRecentlyActive) {
-      setIsSpeaking(false);
-      if (silenceStartMsRef.current === null) {
-        silenceStartMsRef.current = now;
-      } else {
-        const silentElapsedMs = now - silenceStartMsRef.current;
-        if (silentElapsedMs >= PAUSE_DURATION_THRESHOLD_MS) {
-          voiceActiveAfterCommitRef.current = false;
-          if (!isCurrentlyPausedRef.current) {
-            isCurrentlyPausedRef.current = true;
-            pauseCountRef.current += 1;
-            totalPauseSecRef.current += PAUSE_DURATION_THRESHOLD_MS / 1000;
-            setPauseCount(pauseCountRef.current);
-            setIsSilentPause(true);
-          } else {
-            totalPauseSecRef.current += dtMs / 1000;
-          }
-          setTotalPauseSec(Number(totalPauseSecRef.current.toFixed(1)));
-        }
+  const stepRmsPauseState = useCallback((rms, now, overrideThreshold = null) => {
+    const threshold =
+      overrideThreshold !== null
+        ? overrideThreshold
+        : Math.max(
+            MIN_SPEECH_THRESHOLD,
+            Number(((noiseFloorRef.current ?? 0.004) * 2.5).toFixed(4))
+          );
+    const asrVetoActive =
+      lastAsrActivityWallMsRef.current !== null &&
+      now - lastAsrActivityWallMsRef.current < ASR_VETO_WINDOW_MS;
+
+    if (speechStateRef.current === 'speaking') {
+      if (rms >= threshold || asrVetoActive) {
+        belowThresholdSinceMsRef.current = null;
+        setIsSpeaking(true);
+      } else if (belowThresholdSinceMsRef.current === null) {
+        belowThresholdSinceMsRef.current = now;
+      } else if (now - belowThresholdSinceMsRef.current >= SPEAKING_TO_SILENT_HYSTERESIS_MS) {
+        speechStateRef.current = 'silent';
+        silenceStartMsRef.current = belowThresholdSinceMsRef.current;
+        aboveThresholdSinceMsRef.current = null;
+        setIsSpeaking(false);
+        logger.debug('Speech state transition: speaking -> silent', {
+          rms: Number(rms.toFixed(5)),
+          threshold,
+          silenceStartMs: silenceStartMsRef.current,
+        });
       }
       return;
     }
 
-    silenceStartMsRef.current = null;
-    setIsSpeaking(true);
-    setCurrentSilenceSec(0);
-    if (isCurrentlyPausedRef.current) {
-      isCurrentlyPausedRef.current = false;
-      setIsSilentPause(false);
+    if (rms >= threshold) {
+      if (aboveThresholdSinceMsRef.current === null) {
+        aboveThresholdSinceMsRef.current = now;
+      } else if (now - aboveThresholdSinceMsRef.current >= SILENT_TO_SPEAKING_HYSTERESIS_MS) {
+        const pauseDurationMs =
+          silenceStartMsRef.current !== null ? Math.max(0, now - silenceStartMsRef.current) : 0;
+        if (pauseDurationMs >= PAUSE_DURATION_THRESHOLD_MS) {
+          pauseCountRef.current += 1;
+          totalPauseSecRef.current += pauseDurationMs / 1000;
+          setPauseCount(pauseCountRef.current);
+          setTotalPauseSec(Number(totalPauseSecRef.current.toFixed(1)));
+        }
+        logger.debug('Speech state transition: silent -> speaking', {
+          rms: Number(rms.toFixed(5)),
+          threshold,
+          pauseDurationMs: Math.round(pauseDurationMs),
+        });
+        speechStateRef.current = 'speaking';
+        silenceStartMsRef.current = null;
+        belowThresholdSinceMsRef.current = null;
+        aboveThresholdSinceMsRef.current = null;
+        setIsSpeaking(true);
+        setIsSilentPause(false);
+        setCurrentSilenceSec(0);
+      }
+      return;
+    }
+
+    aboveThresholdSinceMsRef.current = null;
+    noiseFloorRef.current =
+      noiseFloorRef.current === null
+        ? rms
+        : noiseFloorRef.current * (1 - NOISE_FLOOR_EMA_ALPHA) + rms * NOISE_FLOOR_EMA_ALPHA;
+    const ongoingMs =
+      silenceStartMsRef.current !== null ? Math.max(0, now - silenceStartMsRef.current) : 0;
+    if (ongoingMs >= PAUSE_DURATION_THRESHOLD_MS) {
+      setIsSilentPause(true);
+      setCurrentSilenceSec(Number((ongoingMs / 1000).toFixed(1)));
     }
   }, []);
 
   const handleWasmRms = useCallback(
     (rms) => {
       pushAudioRms(rms);
-      const now = performance.now();
-      const dtMs =
-        lastWasmRmsWallMsRef.current === null
-          ? 40
-          : Math.min(200, Math.max(0, now - lastWasmRmsWallMsRef.current));
-      lastWasmRmsWallMsRef.current = now;
-
-      if (noiseFloorRmsRef.current === null) {
-        noiseFloorRmsRef.current = Math.min(rms, 0.025);
-      } else if (rms < noiseFloorRmsRef.current) {
-        noiseFloorRmsRef.current = noiseFloorRmsRef.current * 0.85 + rms * 0.15;
-      } else if (rms < noiseFloorRmsRef.current * 2.5) {
-        noiseFloorRmsRef.current = Math.min(0.025, noiseFloorRmsRef.current * 0.99 + rms * 0.01);
-      }
-
-      const adaptiveThreshold = Math.max(
-        0.010,
-        Math.min(0.045, Number((noiseFloorRmsRef.current * 2.2).toFixed(3)))
-      );
-      const asrRecentlyActive =
-        lastAsrActivityWallMsRef.current !== null &&
-        now - lastAsrActivityWallMsRef.current < PAUSE_DURATION_THRESHOLD_MS;
-
-      if (rms >= adaptiveThreshold) {
-        voiceActiveAfterCommitRef.current = true;
-      }
-
-      stepRmsPauseState(rms, adaptiveThreshold, now, dtMs, asrRecentlyActive);
-
-      if (silenceStartMsRef.current !== null && !asrRecentlyActive) {
-        setCurrentSilenceSec(Number(((now - silenceStartMsRef.current) / 1000).toFixed(1)));
-      }
+      stepRmsPauseState(rms, performance.now());
     },
     [pushAudioRms, stepRmsPauseState]
   );
@@ -486,19 +507,17 @@ export function useSpeechAnalytics(
     lastAsrTextRef.current = nextText;
     lastCommittedCountRef.current = safeWords.length;
 
-    if (payload?.isFinal) {
-      hasPartialSpeechRef.current = false;
-      voiceActiveAfterCommitRef.current = false;
-    } else if (nextText) {
-      hasPartialSpeechRef.current = true;
-    }
-
-    if (textChanged || wordsGrew || (!payload?.isFinal && nextText)) {
+    // Veto only: cancel any active pause candidate without recording a pause
+    if ((textChanged && nextText) || wordsGrew || (!payload?.isFinal && nextText)) {
       lastAsrActivityWallMsRef.current = performance.now();
-      silenceStartMsRef.current = null;
-      isCurrentlyPausedRef.current = false;
-      setIsSilentPause(false);
-      setCurrentSilenceSec(0);
+      belowThresholdSinceMsRef.current = null;
+      aboveThresholdSinceMsRef.current = null;
+      if (speechStateRef.current === 'silent') {
+        speechStateRef.current = 'speaking';
+        silenceStartMsRef.current = null;
+        setIsSilentPause(false);
+        setCurrentSilenceSec(0);
+      }
       setIsSpeaking(true);
     }
   }, []);
@@ -722,8 +741,8 @@ export function useSpeechAnalytics(
 
       const threshold = silenceThresholdRef.current;
 
-      // Pause Detection State Machine (> 1.5s below SILENCE_THRESHOLD)
-      stepRmsPauseState(rms, threshold, now, dtMs);
+      // Pause Detection State Machine (RMS + hysteresis)
+      stepRmsPauseState(rms, now, threshold);
 
       // Syllable Energy Burst Detector
       const dipThreshold = threshold * SPEECH_BURST_DIP_FACTOR;
@@ -1039,7 +1058,10 @@ export function useSpeechAnalytics(
   const resetAnalytics = useCallback(() => {
     stopAudioAndSpeech();
     silenceStartMsRef.current = null;
-    isCurrentlyPausedRef.current = false;
+    speechStateRef.current = 'speaking';
+    belowThresholdSinceMsRef.current = null;
+    aboveThresholdSinceMsRef.current = null;
+    noiseFloorRef.current = null;
     lastFrameMsRef.current = null;
     totalPauseSecRef.current = 0;
     pauseCountRef.current = 0;
@@ -1054,10 +1076,6 @@ export function useSpeechAnalytics(
     lastAsrActivityWallMsRef.current = null;
     lastAsrTextRef.current = '';
     lastCommittedCountRef.current = 0;
-    hasPartialSpeechRef.current = false;
-    voiceActiveAfterCommitRef.current = false;
-    noiseFloorRmsRef.current = null;
-    lastWasmRmsWallMsRef.current = null;
 
     setRmsLevel(0);
     setFrequencyBars(new Array(BAR_COUNT).fill(0.05));
@@ -1083,24 +1101,11 @@ export function useSpeechAnalytics(
     estimationMethodRef.current = nextMethod;
   }, [stopAudioAndSpeech]);
 
-  // Timestamp-based pause detection overrides RMS pause counters when WASM word timestamps are present,
-  // but suppresses false trailing silence while partial speech or post-commit voice RMS is active.
-  const suppressTrailingSilence =
-    hasPartialSpeechRef.current || voiceActiveAfterCommitRef.current;
-
-  const timestampPauses = useMemo(() => {
-    if (words.length === 0) return null;
-    return computeWordTimestampPauses(words, activeElapsedSec * 1000, PAUSE_DURATION_THRESHOLD_MS, {
-      suppressTrailingSilence,
-    });
-  }, [words, activeElapsedSec, suppressTrailingSilence]);
-
-  const effectivePauseCount = timestampPauses ? timestampPauses.pauseCount : pauseCount;
-  const effectiveTotalPauseSec = timestampPauses ? timestampPauses.totalPauseSec : totalPauseSec;
-  const effectiveIsSilentPause = timestampPauses ? timestampPauses.isSilentPause : isSilentPause;
-  const effectiveCurrentSilenceSec = timestampPauses
-    ? timestampPauses.currentSilenceSec
-    : currentSilenceSec;
+  // Pauses are computed strictly from audio RMS + hysteresis (decoupled from TRANSCRIPT_UPDATE cadence)
+  const effectivePauseCount = pauseCount;
+  const effectiveTotalPauseSec = totalPauseSec;
+  const effectiveIsSilentPause = isSilentPause;
+  const effectiveCurrentSilenceSec = currentSilenceSec;
 
   // Synchronize active-speech start timestamp and 15s rolling word samples before computing WPM
   if (isRunning) {
