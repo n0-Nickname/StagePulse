@@ -1,16 +1,9 @@
 import React, { memo, useState } from 'react';
 import { Play, Pause, RotateCcw, CheckCircle2 } from 'lucide-react';
 import { useTranslation } from '../context/LanguageContext.jsx';
+import { formatTime } from '../hooks/useTimer.js';
 
 const PRESET_MINUTES = [1, 3, 5, 10];
-
-function formatTime(sec) {
-  const isNegative = sec < 0;
-  const abs = Math.abs(Math.round(sec));
-  const mins = Math.floor(abs / 60);
-  const secs = abs % 60;
-  return `${isNegative ? '-' : ''}${mins}:${secs.toString().padStart(2, '0')}`;
-}
 
 function TimerControls({
   targetDurationSec,
@@ -20,6 +13,9 @@ function TimerControls({
   timerStatus,
   isRunning,
   isPaused,
+  remainingDisplayRef,
+  elapsedDisplayRef,
+  progressBarRef,
   onStart,
   onPause,
   onResume,
@@ -53,31 +49,41 @@ function TimerControls({
       ? 'bg-[#F59E0B] shadow-[0_0_14px_rgba(245,158,11,0.4)]'
       : 'bg-[#10B981] shadow-[0_0_14px_rgba(16,185,129,0.35)]';
 
+  const progressScale = Math.min(1, Math.max(0, (progressPct || 0) / 100));
+
   return (
-    <div className="obsidian-glass rounded-2xl p-6 space-y-6">
+    <div className="obsidian-glass rounded-2xl p-4 sm:p-6 space-y-5 sm:space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <div className="text-xs font-medium uppercase tracking-wider text-[#9CA3AF]">
             {t('timer.timeRemaining')}
           </div>
           <div
+            ref={remainingDisplayRef}
             data-testid="timer-display"
             className={`mt-1.5 text-5xl sm:text-6xl font-bold font-mono tabular-nums tracking-tight ${statusColor}`}
           >
             {formatTime(remainingSec)}
           </div>
           <div className="mt-1.5 text-xs font-mono text-[#9CA3AF] tabular-nums">
-            {t('timer.elapsed')} {formatTime(elapsedSec)} {t('timer.of')}{' '}
-            {formatTime(targetDurationSec)}
+            {t('timer.elapsed')}{' '}
+            <span ref={elapsedDisplayRef} data-testid="timer-elapsed-display">
+              {formatTime(elapsedSec)}
+            </span>{' '}
+            {t('timer.of')} {formatTime(targetDurationSec)}
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
+        {/* Sticky bottom thumb-friendly controls on mobile (360px-430px), inline on sm+ */}
+        <div
+          data-testid="timer-action-bar"
+          className="fixed bottom-0 inset-x-0 z-30 flex flex-wrap items-center justify-center sm:justify-end gap-2 sm:gap-2.5 px-3 py-3 bg-[#07080A]/92 backdrop-blur-md border-t border-white/[0.08] sm:static sm:p-0 sm:bg-transparent sm:backdrop-blur-none sm:border-t-0"
+        >
           {!isRunning && !isPaused && (
             <button
               type="button"
               onClick={onStart}
-              className="crimson-glow-btn inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold cursor-pointer"
+              className="crimson-glow-btn flex-1 sm:flex-none inline-flex items-center justify-center gap-2 min-h-[48px] px-5 py-2.5 rounded-xl text-sm font-semibold cursor-pointer"
             >
               <Play className="h-4 w-4 fill-current" />
               {t('timer.start')}
@@ -87,7 +93,7 @@ function TimerControls({
             <button
               type="button"
               onClick={onPause}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium obsidian-inset hover:bg-white/[0.06] text-[#F4F5F7] transition-colors cursor-pointer"
+              className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 min-h-[48px] px-5 py-2.5 rounded-xl text-sm font-medium obsidian-inset hover:bg-white/[0.06] text-[#F4F5F7] transition-colors cursor-pointer"
             >
               <Pause className="h-4 w-4" />
               {t('timer.pause')}
@@ -97,7 +103,7 @@ function TimerControls({
             <button
               type="button"
               onClick={onResume}
-              className="crimson-glow-btn inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold cursor-pointer"
+              className="crimson-glow-btn flex-1 sm:flex-none inline-flex items-center justify-center gap-2 min-h-[48px] px-5 py-2.5 rounded-xl text-sm font-semibold cursor-pointer"
             >
               <Play className="h-4 w-4 fill-current" />
               {t('timer.resume')}
@@ -108,7 +114,7 @@ function TimerControls({
               <button
                 type="button"
                 onClick={onFinish}
-                className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-semibold bg-[#10B981] hover:bg-[#059669] text-white shadow-[0_0_18px_rgba(16,185,129,0.3)] transition-colors cursor-pointer"
+                className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 min-h-[48px] px-4 py-2.5 rounded-xl text-sm font-semibold bg-[#10B981] hover:bg-[#059669] text-white shadow-[0_0_18px_rgba(16,185,129,0.3)] transition-colors cursor-pointer"
               >
                 <CheckCircle2 className="h-4 w-4" />
                 {t('timer.finishAndSave')}
@@ -116,7 +122,7 @@ function TimerControls({
               <button
                 type="button"
                 onClick={onReset}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-sm font-medium text-[#9CA3AF] hover:text-[#F4F5F7] hover:bg-white/[0.06] transition-colors cursor-pointer"
+                className="inline-flex items-center justify-center gap-1.5 min-h-[48px] px-3.5 py-2.5 rounded-xl text-sm font-medium text-[#9CA3AF] hover:text-[#F4F5F7] hover:bg-white/[0.06] transition-colors cursor-pointer"
               >
                 <RotateCcw className="h-3.5 w-3.5" />
                 {t('common.reset')}
@@ -128,8 +134,9 @@ function TimerControls({
 
       <div className="w-full h-2 rounded-full obsidian-inset overflow-hidden">
         <div
-          className={`h-full transition-all duration-300 ${barColor}`}
-          style={{ width: `${Math.min(100, Math.max(0, progressPct))}%` }}
+          ref={progressBarRef}
+          className={`h-full w-full origin-left transition-colors duration-300 ${barColor}`}
+          style={{ transform: `scaleX(${progressScale})` }}
         />
       </div>
 
@@ -144,7 +151,7 @@ function TimerControls({
                 type="button"
                 disabled={isRunning}
                 onClick={() => onSetTargetDuration(sec)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-mono font-medium border transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed ${
+                className={`min-h-[38px] px-3 py-1.5 rounded-lg text-xs font-mono font-medium border transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed ${
                   active
                     ? 'bg-[#FF6363]/15 border-[#FF6363]/60 text-[#FF6363]'
                     : 'obsidian-inset text-[#9CA3AF] hover:text-[#F4F5F7]'
@@ -167,12 +174,12 @@ function TimerControls({
             onChange={(e) => setCustomMin(e.target.value)}
             placeholder={t('timer.customMinPlaceholder')}
             aria-label={t('timer.customMinPlaceholder')}
-            className="w-28 rounded-lg obsidian-inset px-2.5 py-1.5 text-xs font-mono text-[#F4F5F7] placeholder-[#6B7280] focus:outline-none focus:border-[#FF6363] disabled:opacity-50"
+            className="w-24 sm:w-28 min-h-[38px] rounded-lg obsidian-inset px-2.5 py-1.5 text-xs font-mono text-[#F4F5F7] placeholder-[#6B7280] focus:outline-none focus:border-[#FF6363] disabled:opacity-50"
           />
           <button
             type="submit"
             disabled={isRunning || !customMin}
-            className="px-3 py-1.5 rounded-lg text-xs font-medium obsidian-inset text-[#F4F5F7] hover:bg-white/[0.08] disabled:opacity-45 cursor-pointer disabled:cursor-not-allowed transition-colors"
+            className="min-h-[38px] px-3 py-1.5 rounded-lg text-xs font-medium obsidian-inset text-[#F4F5F7] hover:bg-white/[0.08] disabled:opacity-45 cursor-pointer disabled:cursor-not-allowed transition-colors"
           >
             {t('timer.set')}
           </button>

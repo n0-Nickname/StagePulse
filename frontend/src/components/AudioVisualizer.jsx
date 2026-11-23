@@ -1,19 +1,25 @@
 import React, { memo, useEffect, useRef } from 'react';
 import { useTranslation } from '../context/LanguageContext.jsx';
+import { usePauseMetrics, speechStore } from '../stores/speechStore.js';
 
 function AudioVisualizer({
   frequencyBars = [],
   rmsLevel = 0,
   rmsRef = null,
   barsRef = null,
-  isSilentPause = false,
+  isSilentPause: isSilentPauseProp,
   isRunning = false,
   noiseThreshold = 0.045,
   onChangeThreshold,
   speechLang = 'uk-UA',
   onChangeSpeechLang,
+  store = speechStore,
 }) {
   const { t } = useTranslation();
+  const pauseMetrics = usePauseMetrics(store);
+  const isSilentPause =
+    isSilentPauseProp !== undefined ? isSilentPauseProp : pauseMetrics.isPausedLive;
+
   const barElsRef = useRef([]);
   const rmsTextRef = useRef(null);
 
@@ -58,7 +64,7 @@ function AudioVisualizer({
   }, [isRunning, barsRef, rmsRef, rmsLevel]);
 
   return (
-    <div className="obsidian-glass rounded-2xl p-5 space-y-4">
+    <div className="obsidian-glass rounded-2xl p-4 sm:p-5 space-y-4">
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
         <div className="flex items-center gap-2.5">
           <span
@@ -86,7 +92,7 @@ function AudioVisualizer({
           </span>
         </div>
 
-        <div className="flex flex-wrap items-center gap-4">
+        <div className="flex flex-wrap items-center gap-3 sm:gap-4">
           {onChangeSpeechLang && (
             <div className="flex items-center gap-2">
               <label
@@ -99,7 +105,7 @@ function AudioVisualizer({
                 id="speech-lang-select"
                 value={speechLang}
                 onChange={(e) => onChangeSpeechLang(e.target.value)}
-                className="rounded-lg obsidian-inset px-2.5 py-1 text-xs text-[#F4F5F7] focus:outline-none focus:border-[#FF6363] cursor-pointer"
+                className="rounded-lg obsidian-inset px-2.5 py-1.5 text-xs text-[#F4F5F7] focus:outline-none focus:border-[#FF6363] cursor-pointer"
               >
                 <option value="uk-UA">{t('audio.speechLangUk')}</option>
                 <option value="en-US">{t('audio.speechLangEn')}</option>
@@ -107,10 +113,10 @@ function AudioVisualizer({
             </div>
           )}
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 w-full sm:w-auto">
             <label
               htmlFor="noise-gate-slider"
-              className="text-xs font-mono text-[#9CA3AF] whitespace-nowrap"
+              className="text-xs font-mono text-[#9CA3AF] whitespace-nowrap tabular-nums"
             >
               {t('audio.noiseGate')} ({noiseThreshold.toFixed(3)})
             </label>
@@ -122,13 +128,13 @@ function AudioVisualizer({
               step="0.005"
               value={noiseThreshold}
               onChange={(e) => onChangeThreshold?.(parseFloat(e.target.value))}
-              className="w-32 accent-[#FF6363] cursor-pointer"
+              className="flex-1 sm:w-32 accent-[#FF6363] cursor-pointer"
             />
           </div>
         </div>
       </div>
 
-      <div className="h-24 flex items-end justify-between gap-1.5 px-3 py-2.5 rounded-xl obsidian-inset">
+      <div className="h-20 sm:h-24 flex items-end justify-between gap-1 sm:gap-1.5 px-3 py-2.5 rounded-xl obsidian-inset">
         {frequencyBars.map((val, idx) => {
           const scale = Math.max(0.08, Math.min(1, Number(val ?? 0.05)));
           const barColor = !isRunning
@@ -143,7 +149,9 @@ function AudioVisualizer({
                 barElsRef.current[idx] = el;
               }}
               data-testid="audio-meter-bar"
-              className={`flex-1 h-full origin-bottom rounded-full will-change-transform ${barColor}`}
+              className={`flex-1 h-full origin-bottom rounded-full ${
+                isRunning ? 'will-change-transform ' : ''
+              }${barColor}`}
               style={{ transform: `scaleY(${scale})` }}
             />
           );

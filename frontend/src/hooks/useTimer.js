@@ -1,5 +1,13 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 
+export function formatTime(sec) {
+  const isNegative = sec < 0;
+  const abs = Math.abs(Math.round(sec));
+  const mins = Math.floor(abs / 60);
+  const secs = abs % 60;
+  return `${isNegative ? '-' : ''}${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
 export function useTimer(initialTargetSec = 180) {
   const [targetDurationSec, setTargetDurationSecState] = useState(initialTargetSec);
   const [elapsedSec, setElapsedSec] = useState(0);
@@ -8,67 +16,119 @@ export function useTimer(initialTargetSec = 180) {
 
   const startWallMsRef = useRef(null);
   const accumulatedMsRef = useRef(0);
-  const intervalIdRef = useRef(null);
+  const rafIdRef = useRef(null);
+  const lastSyncedSecRef = useRef(0);
+  const targetDurationRef = useRef(initialTargetSec);
 
-  const clearTimerInterval = useCallback(() => {
-    if (intervalIdRef.current !== null) {
-      clearInterval(intervalIdRef.current);
-      intervalIdRef.current = null;
+  const remainingDisplayRef = useRef(null);
+  const elapsedDisplayRef = useRef(null);
+  const progressBarRef = useRef(null);
+
+  const cancelTimerFrame = useCallback(() => {
+    if (rafIdRef.current !== null) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
     }
   }, []);
 
-  const syncElapsed = useCallback(() => {
-    const startMs = startWallMsRef.current ?? performance.now();
-    const totalMs = accumulatedMsRef.current + (performance.now() - startMs);
-    setElapsedSec(Math.floor(totalMs / 1000));
+  const getTotalMs = useCallback(() => {
+    const runningDelta =
+      startWallMsRef.current !== null ? performance.now() - startWallMsRef.current : 0;
+    return accumulatedMsRef.current + runningDelta;
   }, []);
 
+  const getElapsedSec = useCallback(() => {
+    return Math.floor(getTotalMs() / 1000);
+  }, [getTotalMs]);
+
+  const syncDomDisplay = useCallback((totalMs) => {
+    const elapsed = Math.floor(totalMs / 1000);
+    const target = targetDurationRef.current;
+    if (remainingDisplayRef.current) {
+      remainingDisplayRef.current.textContent = formatTime(target - elapsed);
+    }
+    if (elapsedDisplayRef.current) {
+      elapsedDisplayRef.current.textContent = formatTime(elapsed);
+    }
+    if (progressBarRef.current) {
+      const ratio = target > 0 ? Math.min(1, Math.max(0, totalMs / (target * 1000))) : 0;
+      progressBarRef.current.style.transform = `scaleX(${ratio})`;
+    }
+  }, []);
+
+  const scheduleFrameLoop = useCallback(() => {
+    cancelTimerFrame();
+    const tick = () => {
+      const totalMs = getTotalMs();
+      syncDomDisplay(totalMs);
+      const nextSec = Math.floor(totalMs / 1000);
+      if (nextSec !== lastSyncedSecRef.current) {
+        lastSyncedSecRef.current = nextSec;
+        setElapsedSec(nextSec);
+      }
+      rafIdRef.current = requestAnimationFrame(tick);
+    };
+    rafIdRef.current = requestAnimationFrame(tick);
+  }, [cancelTimerFrame, getTotalMs, syncDomDisplay]);
+
   const start = useCallback(() => {
-    clearTimerInterval();
+    cancelTimerFrame();
     accumulatedMsRef.current = 0;
     startWallMsRef.current = performance.now();
+    lastSyncedSecRef.current = 0;
+    syncDomDisplay(0);
     setElapsedSec(0);
     setIsRunning(true);
     setIsPaused(false);
-    intervalIdRef.current = setInterval(syncElapsed, 100);
-  }, [clearTimerInterval, syncElapsed]);
+    scheduleFrameLoop();
+  }, [cancelTimerFrame, scheduleFrameLoop, syncDomDisplay]);
 
   const pause = useCallback(() => {
     if (startWallMsRef.current !== null) {
       accumulatedMsRef.current += performance.now() - startWallMsRef.current;
       startWallMsRef.current = null;
     }
-    clearTimerInterval();
-    setElapsedSec(Math.floor(accumulatedMsRef.current / 1000));
+    cancelTimerFrame();
+    const pausedSec = Math.floor(accumulatedMsRef.current / 1000);
+    lastSyncedSecRef.current = pausedSec;
+    syncDomDisplay(accumulatedMsRef.current);
+    setElapsedSec(pausedSec);
     setIsRunning(false);
     setIsPaused(true);
-  }, [clearTimerInterval]);
+  }, [cancelTimerFrame, syncDomDisplay]);
 
   const resume = useCallback(() => {
-    clearTimerInterval();
+    cancelTimerFrame();
     startWallMsRef.current = performance.now();
     setIsRunning(true);
     setIsPaused(false);
-    intervalIdRef.current = setInterval(syncElapsed, 100);
-  }, [clearTimerInterval, syncElapsed]);
+    scheduleFrameLoop();
+  }, [cancelTimerFrame, scheduleFrameLoop]);
 
   const reset = useCallback(() => {
-    clearTimerInterval();
+    cancelTimerFrame();
     startWallMsRef.current = null;
     accumulatedMsRef.current = 0;
+    lastSyncedSecRef.current = 0;
+    syncDomDisplay(0);
     setElapsedSec(0);
     setIsRunning(false);
     setIsPaused(false);
-  }, [clearTimerInterval]);
+  }, [cancelTimerFrame, syncDomDisplay]);
 
-  const setTargetDurationSec = useCallback((sec) => {
-    const parsed = Math.max(1, Math.min(7200, Number(sec) || 60));
-    setTargetDurationSecState(parsed);
-  }, []);
+  const setTargetDurationSec = useCallback(
+    (sec) => {
+      const parsed = Math.max(1, Math.min(7200, Number(sec) || 60));
+      targetDurationRef.current = parsed;
+      setTargetDurationSecState(parsed);
+      syncDomDisplay(getTotalMs());
+    },
+    [getTotalMs, syncDomDisplay]
+  );
 
   useEffect(() => {
-    return () => clearTimerInterval();
-  }, [clearTimerInterval]);
+    return () => cancelTimerFrame();
+  }, [cancelTimerFrame]);
 
   const remainingSec = useMemo(() => {
     return targetDurationSec - elapsedSec;
@@ -95,6 +155,10 @@ export function useTimer(initialTargetSec = 180) {
     timerStatus,
     isRunning,
     isPaused,
+    remainingDisplayRef,
+    elapsedDisplayRef,
+    progressBarRef,
+    getElapsedSec,
     start,
     pause,
     resume,
