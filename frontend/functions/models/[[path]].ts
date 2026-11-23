@@ -6,8 +6,7 @@ export const onRequestGet: PagesFunction = async () => {
   if (!res.ok || !res.body) {
     return new Response(`Upstream error: ${res.status}`, { status: 502 });
   }
-  const decompressed = res.body.pipeThrough(new DecompressionStream("gzip"));
-  return new Response(decompressed, {
+  return new Response(res.body, {
     headers: {
       "Content-Type": "application/octet-stream",
       "Cache-Control": "public, max-age=3600",
